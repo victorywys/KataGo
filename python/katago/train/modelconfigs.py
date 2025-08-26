@@ -40,23 +40,24 @@ ModelConfig = Dict[str,Any]
 # version = 14 # V7 features, Squared softplus for error variance predictions
 # version = 15 # V7 features, Extra nonlinearity for pass output
 # version = 16 # V7 features, Q value predictions in the policy head
+# version = 17 # V8 features, adds weight mask spatial feature (channel 22)
 
 def get_version(config: ModelConfig):
     return config["version"]
 
 def get_num_bin_input_features(config: ModelConfig):
     version = get_version(config)
-    if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16:
+    if version in (10,11,12,13,14,15,16):
         return 22
-    else:
-        assert(False)
+    if version in (17, 18):
+        return 23
+    assert False
 
 def get_num_global_input_features(config: ModelConfig):
     version = get_version(config)
-    if version == 10 or version == 11 or version == 12 or version == 13 or version == 14 or version == 15 or version == 16:
+    if version in (10,11,12,13,14,15,16,17, 18):
         return 19
-    else:
-        assert(False)
+    assert False
 
 def get_num_meta_encoder_input_features(config_or_meta_encoder_version: Union[ModelConfig,int]):
     if isinstance(config_or_meta_encoder_version,int):
@@ -170,6 +171,37 @@ b6c96 = {
 
 b10c128 = {
     "version":15,
+    "norm_kind":"fixup",
+    "bnorm_epsilon": 1e-4,
+    "bnorm_running_avg_momentum": 0.001,
+    "initial_conv_1x1": False,
+    "trunk_num_channels":128,
+    "mid_num_channels":128,
+    "gpool_num_channels":32,
+    "use_attention_pool":False,
+    "num_attention_pool_heads":4,
+    "block_kind": [
+        ["rconv1","regular"],
+        ["rconv2","regular"],
+        ["rconv3","regular"],
+        ["rconv4","regular"],
+        ["rconv5","regulargpool"],
+        ["rconv6","regular"],
+        ["rconv7","regular"],
+        ["rconv8","regulargpool"],
+        ["rconv9","regular"],
+        ["rconv10","regular"],
+    ],
+    "p1_num_channels":32,
+    "g1_num_channels":32,
+    "v1_num_channels":32,
+    "sbv2_num_channels":64,
+    "num_scorebeliefs":6,
+    "v2_size":80,
+}
+
+b10c128v18 = {
+    "version":18,
     "norm_kind":"fixup",
     "bnorm_epsilon": 1e-4,
     "bnorm_running_avg_momentum": 0.001,
@@ -1453,6 +1485,9 @@ base_config_of_name = {
     # Small model configs, not too different in inference cost from b10c128
     "b10c128": b10c128,
     "b5c192nbt": b5c192nbt,
+
+    # Small model but with weight mask
+    "b10c128v18": b10c128v18,
 
     # Medium model configs, not too different in inference cost from b15c192
     "b15c192": b15c192,

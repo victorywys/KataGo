@@ -24,23 +24,27 @@ import numpy as np
 EXPECTED_Q_VALUE_TARGETS_NCMOVE_CHANNELS = 3
 
 def assert_keys(npz, include_meta, include_qvalues):
-    keys = [
+    """Allow optional qValueTargetsNCMove and weightedValueTargetsNC keys."""
+    base = {
         "binaryInputNCHWPacked",
         "globalInputNC",
         "policyTargetsNCMove",
         "globalTargetsNC",
         "scoreDistrN",
         "valueTargetsNCHW",
-    ]
+    }
     if include_meta:
-        keys.append("metadataInputNC")
-    # We don't require qValueTargetsNCMove even if include_qvalues is True
-    # since we'll handle missing values by filling with zeros
-    expected_keys = set(keys)
-    actual_keys = set(npz.keys())
-    if include_qvalues and "qValueTargetsNCMove" in actual_keys:
-        expected_keys.add("qValueTargetsNCMove")
-    assert(actual_keys == expected_keys)
+        base.add("metadataInputNC")
+    actual = set(npz.keys())
+    # Optional keys
+    optional = set()
+    if include_qvalues and "qValueTargetsNCMove" in actual:
+        optional.add("qValueTargetsNCMove")
+    if "weightedValueTargetsNC" in actual:
+        optional.add("weightedValueTargetsNC")
+    unexpected = actual - base - optional
+    missing = base - actual
+    assert not missing and not unexpected, f"Missing {missing} unexpected {unexpected} in npz keys {actual}"
 
 def is_temp_npz_like(filename):
     return "_" in filename
@@ -72,6 +76,7 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
     valueTargetsNCHWList = []
     metadataInputNCList = []
     qValueTargetsNCMoveList = []
+    weightedValueTargetsNCList = []
 
     for input_file in input_file_group:
         try:
@@ -95,6 +100,10 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
                         qValueTargetsNCMoveList.append(np.zeros(shape, dtype=np.int16))
                 else:
                     qValueTargetsNCMoveList.append(None)
+                if "weightedValueTargetsNC" in npz:
+                    weightedValueTargetsNCList.append(npz["weightedValueTargetsNC"])  # shape (N,5)
+                else:
+                    weightedValueTargetsNCList.append(None)
 
         except FileNotFoundError:
             num_files_not_found += 1
@@ -103,6 +112,14 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
 
     if len(binaryInputNCHWPackedList) <= 0:
         return num_files_not_found # Early quit since we don't know shapes
+
+    include_weighted = any(arr is not None for arr in weightedValueTargetsNCList)
+    if include_weighted:
+        # Fill missing with zeros to preserve alignment
+        for i in range(len(weightedValueTargetsNCList)):
+            if weightedValueTargetsNCList[i] is None:
+                nrows = binaryInputNCHWPackedList[i].shape[0]
+                weightedValueTargetsNCList[i] = np.zeros((nrows,5),dtype=np.float32)
 
     if len(input_file_group) == 1:
         binaryInputNCHWPacked = binaryInputNCHWPackedList[0]
@@ -113,6 +130,7 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
         valueTargetsNCHW = valueTargetsNCHWList[0]
         metadataInputNC = metadataInputNCList[0]
         qValueTargetsNCMove = qValueTargetsNCMoveList[0]
+        weightedValueTargetsNC = weightedValueTargetsNCList[0] if include_weighted else None
     else:
         binaryInputNCHWPacked = np.concatenate(binaryInputNCHWPackedList, axis=0)
         globalInputNC = np.concatenate(globalInputNCList, axis=0)
@@ -122,6 +140,7 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
         valueTargetsNCHW = np.concatenate(valueTargetsNCHWList, axis=0)
         metadataInputNC = np.concatenate(metadataInputNCList, axis=0) if include_meta else None
         qValueTargetsNCMove = np.concatenate(qValueTargetsNCMoveList, axis=0) if include_qvalues else None
+        weightedValueTargetsNC = np.concatenate(weightedValueTargetsNCList, axis=0) if include_weighted else None
 
     num_rows_to_keep = binaryInputNCHWPacked.shape[0]
     assert(globalInputNC.shape[0] == num_rows_to_keep)
@@ -131,15 +150,30 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
     assert(valueTargetsNCHW.shape[0] == num_rows_to_keep)
     assert(metadataInputNC.shape[0] == num_rows_to_keep if include_meta else True)
     assert(qValueTargetsNCMove.shape[0] == num_rows_to_keep if include_qvalues else True)
+    assert(weightedValueTargetsNC.shape[0] == num_rows_to_keep if include_weighted else True)
 
     if keep_prob < 1.0:
         num_rows_to_keep = min(num_rows_to_keep,int(round(num_rows_to_keep * keep_prob)))
 
-    if include_meta and include_qvalues:
+    if include_meta and include_qvalues and include_weighted:
+        [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove,weightedValueTargetsNC] = (
+            joint_shuffle_take_first_n(
+                num_rows_to_keep,
+                [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove,weightedValueTargetsNC]
+            )
+        )
+    elif include_meta and include_qvalues:
         [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove] = (
             joint_shuffle_take_first_n(
                 num_rows_to_keep,
                 [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove]
+            )
+        )
+    elif include_meta and include_weighted:
+        [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,weightedValueTargetsNC] = (
+            joint_shuffle_take_first_n(
+                num_rows_to_keep,
+                [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,weightedValueTargetsNC]
             )
         )
     elif include_meta:
@@ -149,11 +183,25 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
                 [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC]
             )
         )
+    elif include_qvalues and include_weighted:
+        [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,qValueTargetsNCMove,weightedValueTargetsNC] = (
+            joint_shuffle_take_first_n(
+                num_rows_to_keep,
+                [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,qValueTargetsNCMove,weightedValueTargetsNC]
+            )
+        )
     elif include_qvalues:
         [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,qValueTargetsNCMove] = (
             joint_shuffle_take_first_n(
                 num_rows_to_keep,
                 [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,qValueTargetsNCMove]
+            )
+        )
+    elif include_weighted:
+        [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,weightedValueTargetsNC] = (
+            joint_shuffle_take_first_n(
+                num_rows_to_keep,
+                [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,weightedValueTargetsNC]
             )
         )
     else:
@@ -172,6 +220,7 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
     assert(valueTargetsNCHW.shape[0] == num_rows_to_keep)
     assert(metadataInputNC.shape[0] == num_rows_to_keep if include_meta else True)
     assert(qValueTargetsNCMove.shape[0] == num_rows_to_keep if include_qvalues else True)
+    assert(weightedValueTargetsNC.shape[0] == num_rows_to_keep if include_weighted else True)
 
     rand_assts = np.random.randint(num_out_files,size=[num_rows_to_keep])
     counts = np.bincount(rand_assts,minlength=num_out_files)
@@ -197,6 +246,8 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
             save_dict["metadataInputNC"] = metadataInputNC[start:stop]
         if include_qvalues:
             save_dict["qValueTargetsNCMove"] = qValueTargetsNCMove[start:stop]
+        if include_weighted:
+            save_dict["weightedValueTargetsNC"] = weightedValueTargetsNC[start:stop]
 
         np.savez_compressed(
             os.path.join(out_tmp_dirs[out_idx], str(input_idx) + ".npz"),

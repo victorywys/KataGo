@@ -124,6 +124,10 @@ static void initializeDemoGame(Board& board, BoardHistory& hist, Player& pla, Ra
   board = Board(size,size);
   pla = P_BLACK;
   hist.clear(board,pla,Rules::getTrompTaylorish(),0);
+
+  // Generate random weight mask for demo games
+  board.generateRandomWeightMask(rand);
+
   bot->setPosition(pla,board,hist);
 
   if(size == 19) {

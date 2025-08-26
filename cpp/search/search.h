@@ -112,6 +112,8 @@ struct Search {
 
   bool alwaysIncludeOwnerMap;
 
+  //Board weights to compute the region-focused utility, if any, for the root board.
+  float* boardWeights;
   SearchParams searchParams;
   int64_t numSearchesBegun;
   uint32_t searchNodeAge;
@@ -149,6 +151,9 @@ struct Search {
   int nnXLen;
   int nnYLen;
   int policySize;
+  
+  // Logging configuration
+  bool logBoardWeights;
 
   //================================================================================================================
   // Mutated during search
@@ -230,6 +235,9 @@ struct Search {
   void setExternalPatternBonusTable(std::unique_ptr<PatternBonusTable>&& table);
   void setCopyOfExternalPatternBonusTable(const std::unique_ptr<PatternBonusTable>& table);
   void setNNEval(NNEvaluator* nnEval);
+  void setBoardWeights(const float* weights);
+  void setBoardWeightsbyPos(const Loc pos, const float weight);
+  void setLogBoardWeights(bool enabled);
 
   //If the number of threads is reduced, this can free up some excess threads in the thread pool.
   //Calling this is never necessary, it may just reduce some resource use.
@@ -437,8 +445,10 @@ private:
   double getResultUtilityFromNN(const NNOutput& nnOutput) const;
   double getScoreUtility(double scoreMeanAvg, double scoreMeanSqAvg) const;
   double getScoreUtilityDiff(double scoreMeanAvg, double scoreMeanSqAvg, double delta) const;
+  double getWeightedOwnershipUtility(const NNOutput& nnOutput, const float* weight) const;
   double getApproxScoreUtilityDerivative(double scoreMean) const;
   double getUtilityFromNN(const NNOutput& nnOutput) const;
+  double getUtilityFromNN(const NNOutput& nnOutput, const float* weight) const;
 
   //----------------------------------------------------------------------------------------
   // Miscellaneous search biasing helpers, root move selection, etc.

@@ -67,7 +67,7 @@ SHUFFLE_KEEPROWS=600000 # Needs to be larger than MAX_TRAIN_SAMPLES_PER_CYCLE, s
 
 # Paths to the selfplay and gatekeeper configs that contain board sizes, rules, search parameters, etc.
 # See cpp/configs/training/README.md for some notes on other selfplay configs.
-SELFPLAY_CONFIG="$GITROOTDIR"/cpp/configs/training/selfplay1.cfg
+SELFPLAY_CONFIG="$GITROOTDIR"/cpp/configs/training/selfplay1_weight_mask.cfg
 GATING_CONFIG="$GITROOTDIR"/cpp/configs/training/gatekeeper1.cfg
 
 # Copy all the relevant scripts and configs and the katago executable to a dated directory.

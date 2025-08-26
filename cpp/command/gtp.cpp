@@ -104,6 +104,9 @@ static const vector<string> knownCommands = {
   "kata-debug-print-tc",
   "debug_moves",
 
+  //Board weight commands
+  "boardweight",
+
   //Stop any ongoing ponder or analyze
   "stop",
 };
@@ -455,7 +458,7 @@ struct GTPEngine {
   }
 
   //Specify -1 for the sizes for a default
-  void setOrResetBoardSize(ConfigParser& cfg, Logger& logger, Rand& seedRand, int boardXSize, int boardYSize, bool loggingToStderr) {
+  void setOrResetBoardSize(ConfigParser& cfg, Logger& logger, Rand& seedRand, int boardXSize, int boardYSize, bool loggingToStderr, bool logBoardWeights) {
     bool wasDefault = false;
     if(boardXSize == -1 || boardYSize == -1) {
       boardXSize = Board::DEFAULT_LEN;
@@ -552,6 +555,12 @@ struct GTPEngine {
 
       bot = new AsyncBot(genmoveParams, nnEval, humanEval, &logger, searchRandSeed);
       bot->setCopyOfExternalPatternBonusTable(patternBonusTable);
+      
+      // Set board weights logging flag
+      Search* search = bot->getSearchStopAndWait();
+      if(search != NULL) {
+        search->setLogBoardWeights(logBoardWeights);
+      }
 
       Board board(boardXSize,boardYSize);
       Player pla = P_BLACK;
@@ -1912,6 +1921,7 @@ int MainCmds::gtp(const vector<string>& args) {
   const bool logAllGTPCommunication = cfg.getBool("logAllGTPCommunication");
   const bool logSearchInfo = cfg.getBool("logSearchInfo");
   const bool logSearchInfoForChosenMove = cfg.contains("logSearchInfoForChosenMove") ? cfg.getBool("logSearchInfoForChosenMove") : false;
+  const bool logBoardWeights = cfg.contains("logBoardWeights") ? cfg.getBool("logBoardWeights") : false;
 
   bool startupPrintMessageToStderr = true;
   if(cfg.contains("startupPrintMessageToStderr"))
@@ -2044,7 +2054,7 @@ int MainCmds::gtp(const vector<string>& args) {
     perspective,analysisPVLen,
     std::move(patternBonusTable)
   );
-  engine->setOrResetBoardSize(cfg,logger,seedRand,defaultBoardXSize,defaultBoardYSize,logger.isLoggingToStderr());
+  engine->setOrResetBoardSize(cfg,logger,seedRand,defaultBoardXSize,defaultBoardYSize,logger.isLoggingToStderr(),logBoardWeights);
 
   auto maybeSaveAvoidPatterns = [&](bool forceSave) {
     if(engine != NULL && autoAvoidPatterns) {
@@ -2304,7 +2314,7 @@ int MainCmds::gtp(const vector<string>& args) {
         response = Global::strprintf("unacceptable size (Board::MAX_LEN is %d, consider increasing and recompiling)",(int)Board::MAX_LEN);
       }
       else {
-        engine->setOrResetBoardSize(cfg,logger,seedRand,newXSize,newYSize,logger.isLoggingToStderr());
+        engine->setOrResetBoardSize(cfg,logger,seedRand,newXSize,newYSize,logger.isLoggingToStderr(),logBoardWeights);
       }
     }
 
@@ -2344,6 +2354,43 @@ int MainCmds::gtp(const vector<string>& args) {
 
     else if(command == "get_komi") {
       response = Global::doubleToString(engine->getCurrentRules().komi);
+    }
+
+    else if(command == "boardweight") {
+      if(pieces.size() != 2) {
+        responseIsError = true;
+        response = "Expected two arguments for boardweight (position weight) but got '" + Global::concat(pieces," ") + "'";
+      }
+      else {
+        Loc loc;
+        float weight = 0.0f;
+        bool locSuccess = tryParseLoc(pieces[0], engine->bot->getRootBoard(), loc);
+        bool weightSuccess = Global::tryStringToFloat(pieces[1], weight);
+        
+        if(!locSuccess) {
+          responseIsError = true;
+          response = "Could not parse board position: " + pieces[0];
+        }
+        else if(!weightSuccess) {
+          responseIsError = true;
+          response = "Could not parse weight as float: " + pieces[1];
+        }
+        else if(isnan(weight) || weight < 0.0f) {
+          responseIsError = true;
+          response = "Weight must be a non-negative number, got: " + pieces[1];
+        }
+        else {
+          Search* search = engine->bot->getSearchStopAndWait();
+          int pos = search->getPos(loc);
+          search->setBoardWeightsbyPos(pos, weight);
+          
+          if(logBoardWeights) {
+            logger.write("GTP boardweight: Set weight at " + pieces[0] + " (pos=" + Global::intToString(pos) + ") to " + Global::floatToString(weight));
+          }
+          
+          response = "Set board weight at " + pieces[0] + " to " + Global::floatToString(weight);
+        }
+      }
     }
 
     else if(command == "kata-get-rules") {
@@ -3376,7 +3423,7 @@ int MainCmds::gtp(const vector<string>& args) {
                 cerr << out.str() << endl;
             }
             maybeSaveAvoidPatterns(false);
-            engine->setOrResetBoardSize(cfg,logger,seedRand,sgfBoard.x_size,sgfBoard.y_size,logger.isLoggingToStderr());
+            engine->setOrResetBoardSize(cfg,logger,seedRand,sgfBoard.x_size,sgfBoard.y_size,logger.isLoggingToStderr(),logBoardWeights);
             engine->setPositionAndRules(sgfNextPla, sgfBoard, sgfHist, sgfInitialBoard, sgfInitialNextPla, sgfHist.moveHistory);
           }
         }

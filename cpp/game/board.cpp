@@ -126,6 +126,9 @@ Board::Board(const Board& other)
   numBlackCaptures = other.numBlackCaptures;
   numWhiteCaptures = other.numWhiteCaptures;
 
+  // Copy weight mask
+  memcpy(weight_mask, other.weight_mask, sizeof(float)*MAX_ARR_SIZE);
+
   memcpy(adj_offsets, other.adj_offsets, sizeof(short)*8);
 }
 
@@ -140,6 +143,10 @@ void Board::init(int xS, int yS)
 
   for(int i = 0; i < MAX_ARR_SIZE; i++)
     colors[i] = C_WALL;
+
+  // Initialize weight mask to uniform weights
+  for(int i = 0; i < MAX_ARR_SIZE; i++)
+    weight_mask[i] = 1.0f;
 
   for(int y = 0; y < y_size; y++)
   {
@@ -2839,4 +2846,57 @@ bool Board::simpleRepetitionBoundGt(Loc loc, int bound) const {
   }
 
   return false;
+}
+
+//WEIGHT MASK FUNCTIONS----------------------------------------------------------
+
+void Board::generateRandomWeightMask(Rand& rand) {
+  for(int y = 0; y < y_size; y++) {
+    for(int x = 0; x < x_size; x++) {
+      Loc loc = Location::getLoc(x,y,x_size);
+      // Generate weights in range [0.5, 1.5] with mean 1.0
+      weight_mask[loc] = 0.5f + rand.nextDouble();
+    }
+  }
+  // Set wall locations to 0
+  for(int i = 0; i < MAX_ARR_SIZE; i++) {
+    if(colors[i] == C_WALL) {
+      weight_mask[i] = 0.0f;
+    }
+  }
+}
+
+void Board::setUniformWeightMask() {
+  for(int y = 0; y < y_size; y++) {
+    for(int x = 0; x < x_size; x++) {
+      Loc loc = Location::getLoc(x,y,x_size);
+      weight_mask[loc] = 1.0f;
+    }
+  }
+  // Set wall locations to 0
+  for(int i = 0; i < MAX_ARR_SIZE; i++) {
+    if(colors[i] == C_WALL) {
+      weight_mask[i] = 0.0f;
+    }
+  }
+}
+
+void Board::copyWeightMask(const Board& other) {
+  memcpy(weight_mask, other.weight_mask, sizeof(float)*MAX_ARR_SIZE);
+}
+
+double Board::calculateWeightedAreaScore(const Color* area) const {
+  double score = 0.0;
+  for(int y = 0; y < y_size; y++) {
+    for(int x = 0; x < x_size; x++) {
+      Loc loc = Location::getLoc(x,y,x_size);
+      if(area[loc] == C_WHITE) {
+        score += weight_mask[loc];
+      }
+      else if(area[loc] == C_BLACK) {
+        score -= weight_mask[loc];
+      }
+    }
+  }
+  return score;
 }

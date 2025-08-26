@@ -300,9 +300,45 @@ double Search::getApproxScoreUtilityDerivative(double scoreMean) const {
   return staticScoreValueDerivative * searchParams.staticScoreUtilityFactor + dynamicScoreValueDerivative * searchParams.dynamicScoreUtilityFactor;
 }
 
+double Search::getWeightedOwnershipUtility(const NNOutput& nnOutput, const float* weight) const {
+  if(nnOutput.whiteOwnerMap == NULL)
+    return 0.0;
+
+  auto whiteOwnerMap = nnOutput.whiteOwnerMap;
+  double totalWeight = 0.0;
+  double weightedUtility = 0.0;
+  for (int i = 0; i < nnXLen * nnYLen; i++) {
+    weightedUtility += whiteOwnerMap[i] * weight[i];
+    totalWeight += weight[i];
+  }
+  
+  double result = totalWeight > 0 ? weightedUtility / totalWeight : 0.0;
+  
+  // Log board weights usage if enabled
+  if(logBoardWeights && logger != NULL) {
+    static int logCounter = 0;
+    if(logCounter < 10) { // Only log first 10 calls to avoid spam
+      logger->write("NN weighted utility evaluation: totalWeight=" + Global::doubleToString(totalWeight) + 
+                   ", weightedUtility=" + Global::doubleToString(weightedUtility) +
+                   ", result=" + Global::doubleToString(result));
+      logCounter++;
+    }
+  }
+  
+  return result;
+}
 
 double Search::getUtilityFromNN(const NNOutput& nnOutput) const {
   double resultUtility = getResultUtilityFromNN(nnOutput);
+  return resultUtility + getScoreUtility(nnOutput.whiteScoreMean, nnOutput.whiteScoreMeanSq);
+}
+
+double Search::getUtilityFromNN(const NNOutput& nnOutput, const float* weight) const {
+  if (weight == nullptr) {
+    return getUtilityFromNN(nnOutput);
+  }
+  double resultUtility = getResultUtilityFromNN(nnOutput);
+  resultUtility += getWeightedOwnershipUtility(nnOutput, weight);
   return resultUtility + getScoreUtility(nnOutput.whiteScoreMean, nnOutput.whiteScoreMeanSq);
 }
 

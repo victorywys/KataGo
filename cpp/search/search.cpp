@@ -83,7 +83,9 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
    mirrorAdvantage(0.0),
    mirrorCenterSymmetryError(1e10),
    alwaysIncludeOwnerMap(false),
-   searchParams(params),numSearchesBegun(0),searchNodeAge(0),
+   searchParams(params),
+   boardWeights(nullptr),
+   numSearchesBegun(0),searchNodeAge(0),
    plaThatSearchIsFor(C_EMPTY),plaThatSearchIsForLastSearch(C_EMPTY),
    lastSearchNumPlayouts(0),
    effectiveSearchTimeCarriedOver(0.0),
@@ -99,6 +101,7 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
    nnXLen(),
    nnYLen(),
    policySize(),
+   logBoardWeights(false),
    rootNode(NULL),
    nodeTable(NULL),
    mutexPool(NULL),
@@ -148,6 +151,7 @@ Search::~Search() {
   delete[] rootSafeArea;
   delete rootKoHashTable;
   delete valueWeightDistribution;
+  delete[] boardWeights;
 
   delete nodeTable;
   delete mutexPool;
@@ -286,6 +290,35 @@ void Search::setNNEval(NNEvaluator* nnEval) {
     if(humanEvaluator->getNNXLen() != nnXLen || humanEvaluator->getNNYLen() != nnYLen)
       throw StringError("Search::setNNEval - humanEval has different nnXLen or nnYLen");
   }
+}
+
+void Search::setBoardWeights(const float* weights) {
+  if (weights == boardWeights) {
+    return; // No change, nothing to do
+  }
+  clearSearch(); // Clear search to ensure weights are applied correctly
+  if (boardWeights != NULL) {
+    delete[] boardWeights; // Free old weights if they exist
+  }
+  if (weights == nullptr) {
+    boardWeights = nullptr; // Set to nullptr if no weights provided
+    return;
+  }
+  size_t size = nnXLen * nnYLen;
+  boardWeights = new float[size];
+  std::copy(weights, weights + size, boardWeights); // Copy new weights
+}
+
+void Search::setBoardWeightsbyPos(const Loc pos, const float weight) {
+  if (boardWeights == NULL) {
+    boardWeights = new float[nnXLen * nnYLen];
+    std::fill(boardWeights, boardWeights + nnXLen * nnYLen, 1.0f); // Initialize to zero if not already set
+  }
+  boardWeights[pos] = weight;
+}
+
+void Search::setLogBoardWeights(bool enabled) {
+  logBoardWeights = enabled;
 }
 
 void Search::clearSearch() {

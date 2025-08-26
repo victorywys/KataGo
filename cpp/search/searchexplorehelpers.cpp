@@ -299,10 +299,12 @@ double Search::getFpuValueForChildrenAssumeVisited(
   double parentUtilityForFPU = parentUtility;
   if(searchParams.fpuParentWeightByVisitedPolicy) {
     double avgWeight = std::min(1.0, pow(policyProbMassVisited, searchParams.fpuParentWeightByVisitedPolicyPow));
-    parentUtilityForFPU = avgWeight * parentUtility + (1.0 - avgWeight) * getUtilityFromNN(*(node.getNNOutput()));
+    parentUtilityForFPU = avgWeight * parentUtility + (1.0 - avgWeight) * getUtilityFromNN(*(node.getNNOutput()), boardWeights);
   }
   else if(searchParams.fpuParentWeight > 0.0) {
-    parentUtilityForFPU = searchParams.fpuParentWeight * getUtilityFromNN(*(node.getNNOutput())) + (1.0 - searchParams.fpuParentWeight) * parentUtility;
+    // Use weighted version if weights are available
+    parentUtilityForFPU = searchParams.fpuParentWeight * getUtilityFromNN(*(node.getNNOutput()), boardWeights) 
+                        + (1.0 - searchParams.fpuParentWeight) * parentUtility;
   }
 
   double fpuValue;

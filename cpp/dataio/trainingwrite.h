@@ -102,6 +102,8 @@ struct FinishedGameData {
   std::vector<double> searchEntropyByTurn;
   std::vector<ValueTargets> whiteValueTargetsByTurn; //Except this one, we may have some of
   std::vector<QValueTargets> whiteQValueTargetsByTurn;
+  //Weighted value targets by turn (parallel to whiteValueTargetsByTurn) using per-point weight mask
+  std::vector<ValueTargets> weightedValueTargetsByTurn;
   std::vector<NNRawStats> nnRawStatsByTurn;
   Color* finalFullArea;
   Color* finalOwnership;
@@ -250,6 +252,9 @@ struct TrainingWriteBuffers {
 
   NumpyBuffer<float> metadataInputNC;
 
+  //Weighted value targets (white perspective) per row: win, loss, noResult, weightedScore, weightedLead
+  NumpyBuffer<float> weightedValueTargetsNC;
+
   TrainingWriteBuffers(
     int inputsVersion,
     int maxRows,
@@ -281,6 +286,8 @@ struct TrainingWriteBuffers {
     const std::vector<ValueTargets>& whiteValueTargets,
     const std::vector<QValueTargets>& whiteQValueTargets,
     int whiteValueTargetsIdx, //index in whiteValueTargets corresponding to this turn.
+    const std::vector<ValueTargets>* weightedValueTargets, //can be null, will fallback to whiteValueTargets
+    int weightedValueTargetsIdx,
     float valueTargetWeight,
     float tdValueTargetWeight,
     float leadTargetWeightFactor,

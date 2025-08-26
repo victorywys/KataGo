@@ -26,6 +26,7 @@ def read_npz_training_data(
     (h_base,h_builder) = build_history_matrices(model_config, device)
 
     include_qvalues = model_config["version"] >= 16
+    include_weighted_values = model_config["version"] >= 18
 
     def load_npz_file(npz_file):
         with np.load(npz_file) as npz:
@@ -39,10 +40,14 @@ def read_npz_training_data(
                 metadataInputNC = npz["metadataInputNC"].astype(np.float32)
             else:
                 metadataInputNC = None
-            if include_qvalues:
+            if include_qvalues and "qValueTargetsNCMove" in npz:
                 qValueTargetsNCMove = npz["qValueTargetsNCMove"].astype(np.float32)
             else:
                 qValueTargetsNCMove = None
+            if include_weighted_values and "weightedValueTargetsNC" in npz:
+                weightedValueTargetsNC = npz["weightedValueTargetsNC"].astype(np.float32)
+            else:
+                weightedValueTargetsNC = None
         del npz
 
         binaryInputNCHW = np.unpackbits(binaryInputNCHWPacked,axis=2)
@@ -53,9 +58,26 @@ def read_npz_training_data(
             binaryInputNCHW.shape[0], binaryInputNCHW.shape[1], pos_len, pos_len
         )).astype(np.float32)
 
+        # Handle mismatch between data (possibly 23 channels including weight mask) and model config (possibly 22)
+        if binaryInputNCHW.shape[1] != num_bin_features:
+            if binaryInputNCHW.shape[1] == 23 and num_bin_features == 22:
+                # Drop the last channel (weight mask) so older nets (version<17) can still train
+                binaryInputNCHW = binaryInputNCHW[:, :22]
+                if not hasattr(read_npz_training_data, "_warned_feature_crop"):
+                    logging.warning("Cropping weight mask feature channel (23->22) to match older model version; upgrade model config to version 17+ to use it.")
+                    read_npz_training_data._warned_feature_crop = True
+            elif binaryInputNCHW.shape[1] == 22 and num_bin_features == 23:
+                # Pad with a weight mask of 1.0s (neutral) for older data when using newer model
+                pad = np.ones((binaryInputNCHW.shape[0],1,pos_len,pos_len), dtype=binaryInputNCHW.dtype)
+                binaryInputNCHW = np.concatenate([binaryInputNCHW, pad], axis=1)
+                if not hasattr(read_npz_training_data, "_warned_feature_pad"):
+                    logging.warning("Padding missing weight mask feature channel (22->23) with ones; regenerate data with version 17 features for full effect.")
+                    read_npz_training_data._warned_feature_pad = True
+            else:
+                raise AssertionError(f"Binary feature channel mismatch: data has {binaryInputNCHW.shape[1]}, model expects {num_bin_features}")
         assert binaryInputNCHW.shape[1] == num_bin_features
         assert globalInputNC.shape[1] == num_global_features
-        return (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove)
+        return (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove, weightedValueTargetsNC)
 
     if not npz_files:
         return
@@ -64,7 +86,7 @@ def read_npz_training_data(
         future = executor.submit(load_npz_file, npz_files[0])
 
         for next_file in (npz_files[1:] + [None]):
-            (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove) = future.result()
+            (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove, weightedValueTargetsNC) = future.result()
 
             num_samples = binaryInputNCHW.shape[0]
             # Just discard stuff that doesn't divide evenly
@@ -88,8 +110,10 @@ def read_npz_training_data(
                 batch_valueTargetsNCHW = torch.from_numpy(valueTargetsNCHW[start:end]).to(device)
                 if include_meta:
                     batch_metadataInputNC = torch.from_numpy(metadataInputNC[start:end]).to(device)
-                if include_qvalues:
+                if include_qvalues and qValueTargetsNCMove is not None:
                     batch_qValueTargetsNCMove = torch.from_numpy(qValueTargetsNCMove[start:end]).to(device)
+                if include_weighted_values and weightedValueTargetsNC is not None:
+                    batch_weightedValueTargetsNC = torch.from_numpy(weightedValueTargetsNC[start:end]).to(device)
 
                 (batch_binaryInputNCHW, batch_globalInputNC) = apply_history_matrices(
                     model_config, batch_binaryInputNCHW, batch_globalInputNC, batch_globalTargetsNC, h_base, h_builder
@@ -100,14 +124,19 @@ def read_npz_training_data(
                     batch_binaryInputNCHW = apply_symmetry(batch_binaryInputNCHW, symm)
                     batch_policyTargetsNCMove = apply_symmetry_policy(batch_policyTargetsNCMove, symm, pos_len)
                     batch_valueTargetsNCHW = apply_symmetry(batch_valueTargetsNCHW, symm)
-                    if include_qvalues:
+                    if include_qvalues and qValueTargetsNCMove is not None:
                         batch_qValueTargetsNCMove = apply_symmetry_policy(batch_qValueTargetsNCMove, symm, pos_len)
+                    if include_weighted_values and weightedValueTargetsNC is not None:
+                        # Weighted targets are [N,5] no symmetry needed
+                        pass
 
                 batch_binaryInputNCHW = batch_binaryInputNCHW.contiguous()
                 batch_policyTargetsNCMove = batch_policyTargetsNCMove.contiguous()
                 batch_valueTargetsNCHW = batch_valueTargetsNCHW.contiguous()
-                if include_qvalues:
+                if include_qvalues and qValueTargetsNCMove is not None:
                     batch_qValueTargetsNCMove = batch_qValueTargetsNCMove.contiguous()
+                if include_weighted_values and weightedValueTargetsNC is not None:
+                    batch_weightedValueTargetsNC = batch_weightedValueTargetsNC.contiguous()
 
                 batch = dict(
                     binaryInputNCHW = batch_binaryInputNCHW,
@@ -119,8 +148,10 @@ def read_npz_training_data(
                 )
                 if include_meta:
                     batch["metadataInputNC"] = batch_metadataInputNC
-                if include_qvalues:
+                if include_qvalues and qValueTargetsNCMove is not None:
                     batch["qValueTargetsNCMove"] = batch_qValueTargetsNCMove
+                if include_weighted_values and weightedValueTargetsNC is not None:
+                    batch["weightedValueTargetsNC"] = batch_weightedValueTargetsNC
 
                 yield batch
 
@@ -168,38 +199,36 @@ def apply_symmetry(tensor, symm):
 
 def build_history_matrices(model_config: modelconfigs.ModelConfig, device):
     num_bin_features = modelconfigs.get_num_bin_input_features(model_config)
-    assert num_bin_features == 22, "Currently this code is hardcoded for this many features"
+    # Accept 22 (older) or 23 (with weight mask) features
+    assert num_bin_features in (22,23), f"Unexpected num_bin_features={num_bin_features}"
 
-    h_base = torch.diag(
-        torch.tensor(
-            [
-                1.0,  # 0
-                1.0,  # 1
-                1.0,  # 2
-                1.0,  # 3
-                1.0,  # 4
-                1.0,  # 5
-                1.0,  # 6
-                1.0,  # 7
-                1.0,  # 8
-                0.0,  # 9   Location of move 1 turn ago
-                0.0,  # 10  Location of move 2 turns ago
-                0.0,  # 11  Location of move 3 turns ago
-                0.0,  # 12  Location of move 4 turns ago
-                0.0,  # 13  Location of move 5 turns ago
-                1.0,  # 14  Ladder-threatened stone
-                0.0,  # 15  Ladder-threatened stone, 1 turn ago
-                0.0,  # 16  Ladder-threatened stone, 2 turns ago
-                1.0,  # 17
-                1.0,  # 18
-                1.0,  # 19
-                1.0,  # 20
-                1.0,  # 21
-            ],
-            device=device,
-            requires_grad=False,
-        )
-    )
+    base_vals = [
+        1.0,  # 0
+        1.0,  # 1
+        1.0,  # 2
+        1.0,  # 3
+        1.0,  # 4
+        1.0,  # 5
+        1.0,  # 6
+        1.0,  # 7
+        1.0,  # 8
+        0.0,  # 9   Location of move 1 turn ago
+        0.0,  # 10  Location of move 2 turns ago
+        0.0,  # 11  Location of move 3 turns ago
+        0.0,  # 12  Location of move 4 turns ago
+        0.0,  # 13  Location of move 5 turns ago
+        1.0,  # 14  Ladder-threatened stone
+        0.0,  # 15  Ladder-threatened stone, 1 turn ago
+        0.0,  # 16  Ladder-threatened stone, 2 turns ago
+        1.0,  # 17
+        1.0,  # 18
+        1.0,  # 19
+        1.0,  # 20
+        1.0,  # 21
+    ]
+    if num_bin_features == 23:
+        base_vals.append(1.0)  # 22 weight mask feature - static (not history-shifted)
+    h_base = torch.diag(torch.tensor(base_vals, device=device, requires_grad=False))
     # Because we have ladder features that express past states rather than past diffs,
     # the most natural encoding when we have no history is that they were always the
     # same, rather than that they were all zero. So rather than zeroing them we have no

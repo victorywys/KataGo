@@ -20,7 +20,8 @@ PlaySettings::PlaySettings()
    dynamicSelfKomiBonusMax(0.0),
    dynamicSelfKomiWinLossMin(-1.0),
    dynamicSelfKomiWinLossMax(1.0),
-   recordTimePerMove(false)
+  recordTimePerMove(false),
+  weightMaskUniformProb(0.0)
 {}
 PlaySettings::~PlaySettings()
 {}
@@ -109,6 +110,9 @@ PlaySettings PlaySettings::loadForSelfplay(ConfigParser& cfg, bool isDistributed
   playSettings.minAsymmetricCompensateKomiProb = cfg.getDouble("minAsymmetricCompensateKomiProb",0.0,1.0);
   playSettings.sekiForkHackProb = cfg.contains("sekiForkHackProb") ? cfg.getDouble("sekiForkHackProb",0.0,1.0) : 0.0;
   playSettings.forSelfPlay = true;
+
+  //Probability of using a uniform (all-1) weight mask instead of randomized mask
+  playSettings.weightMaskUniformProb = cfg.contains("weightMaskUniformProb") ? cfg.getDouble("weightMaskUniformProb",0.0,1.0) : 0.30;
 
   if(playSettings.policySurpriseDataWeight + playSettings.valueSurpriseDataWeight > 1.0)
     throw StringError("policySurpriseDataWeight + valueSurpriseDataWeight > 1.0");

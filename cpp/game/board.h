@@ -18,6 +18,7 @@
 //TYPES AND CONSTANTS-----------------------------------------------------------------
 
 struct Board;
+class Rand;
 
 //Player
 typedef int8_t Player;
@@ -259,6 +260,15 @@ struct Board
   //Get a random legal move that does not fill a simple eye.
   /* Loc getRandomMCLegal(Player pla); */
 
+  //Generate random weight mask for weighted scoring
+  void generateRandomWeightMask(Rand& rand);
+  //Set weight mask to uniform weights (all 1.0)
+  void setUniformWeightMask();
+  //Copy weight mask from another board
+  void copyWeightMask(const Board& other);
+  //Calculate weighted area score
+  double calculateWeightedAreaScore(const Color* area) const;
+
   //Check if the given stone is in unescapable atari or can be put into unescapable atari.
   //WILL perform a mutable search - may alter the linked lists or heads, etc.
   bool searchIsLadderCaptured(Loc loc, bool defenderFirst, std::vector<Loc>& buf);
@@ -325,6 +335,9 @@ struct Board
 
   int numBlackCaptures; //Number of b stones captured, informational and used by board history when clearing pos
   int numWhiteCaptures; //Number of w stones captured, informational and used by board history when clearing pos
+
+  // Weight mask for weighted scoring - randomly generated during self-play
+  float weight_mask[MAX_ARR_SIZE]; //Weight value for each location on the board for weighted scoring
 
   short adj_offsets[8]; //Indices 0-3: Offsets to add for adjacent points. Indices 4-7: Offsets for diagonal points. 2 and 3 are +x and +y.
 

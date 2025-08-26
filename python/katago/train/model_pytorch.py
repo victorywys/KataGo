@@ -32,7 +32,7 @@ def debug_print_tensor(tensor):
         total1 += (((cc + hh // 2 + ww // 3 + nn // 4) % 2)*2-1) * value
         total2 += (((cc + hh // 3 + ww // 1 + nn // 3) % 2)*2-1) * value
         total3 += (((cc + hh // 5 + ww // 2 + nn // 2) % 2)*2-1) * value
-    print(f"TOTAL {out.shape} {total1} {total2} {total3}")
+    print(f"TOTAL {tensor.shape} {total1} {total2} {total3}")
 
 
 class ExtraOutputs:
@@ -1547,6 +1547,35 @@ class ValueHead(torch.nn.Module):
             out_scorebelief_logprobs,
         )
 
+class WeightedValueHead(torch.nn.Module):
+    def __init__(self, c_in, c_hidden, activation):
+        super(WeightedValueHead, self).__init__()
+        self.activation = activation
+        self.conv1 = torch.nn.Conv2d(c_in, c_hidden, kernel_size=1, padding="same", bias=False)
+        self.bias1 = BiasMask(c_hidden, config=dict(), is_after_batchnorm=True)
+        self.act1 = act(activation)
+        self.gpool = KataValueHeadGPool()
+        self.linear = torch.nn.Linear(3 * c_hidden, 5, bias=True)
+    def initialize(self):
+        init_weights(self.conv1.weight, self.activation, scale=1.0)
+        init_weights(self.linear.weight, "identity", scale=1.0)
+        init_weights(self.linear.bias, "identity", scale=0.2, fan_tensor=self.linear.weight)
+    def add_reg_dict(self, reg_dict:Dict[str,List]):
+        reg_dict["output"].append(self.conv1.weight)
+        reg_dict["output"].append(self.linear.weight)
+        reg_dict["output_noreg"].append(self.linear.bias)
+        self.bias1.add_reg_dict(reg_dict)
+    def set_brenorm_params(self, renorm_avg_momentum: float, rmax: float, dmax: float):
+        pass
+    def add_brenorm_clippage(self, upper_rclippage, lower_rclippage, dclippage):
+        pass
+    def forward(self, x, mask, mask_sum_hw, mask_sum:float):
+        y = self.conv1(x)
+        y = self.bias1(y, mask=mask, mask_sum=mask_sum)
+        y = self.act1(y)
+        ypool = self.gpool(y, mask=mask, mask_sum_hw=mask_sum_hw).squeeze(-1).squeeze(-1)
+        return self.linear(ypool)
+
 class MetadataEncoder(torch.nn.Module):
     def __init__(self, config: modelconfigs.ModelConfig):
         super(MetadataEncoder, self).__init__()
@@ -1650,10 +1679,12 @@ class Model(torch.nn.Module):
 
         self.activation = "relu" if "activation" not in config else config["activation"]
 
+        # Dynamic number of spatial input feature channels based on model version
+        self.num_bin_input_features = modelconfigs.get_num_bin_input_features(config)
         if config["initial_conv_1x1"]:
-            self.conv_spatial = torch.nn.Conv2d(22, self.c_trunk, kernel_size=1, padding="same", bias=False)
+            self.conv_spatial = torch.nn.Conv2d(self.num_bin_input_features, self.c_trunk, kernel_size=1, padding="same", bias=False)
         else:
-            self.conv_spatial = torch.nn.Conv2d(22, self.c_trunk, kernel_size=3, padding="same", bias=False)
+            self.conv_spatial = torch.nn.Conv2d(self.num_bin_input_features, self.c_trunk, kernel_size=3, padding="same", bias=False)
         self.linear_global = torch.nn.Linear(19, self.c_trunk, bias=False)
 
         if "metadata_encoder" in config and config["metadata_encoder"] is not None:
@@ -1661,7 +1692,14 @@ class Model(torch.nn.Module):
         else:
             self.metadata_encoder = None
 
-        self.bin_input_shape = [22, pos_len, pos_len]
+        self.bin_input_shape = [self.num_bin_input_features, pos_len, pos_len]
+        # Weight mask feature only exists for version >=17 (23 binary features)
+        self.uses_weight_mask = (self.num_bin_input_features >= 23)
+        if self.uses_weight_mask:
+            # Weight mask conv to generate additive feature map from the last channel (index 22)
+            self.weight_mask_conv = torch.nn.Conv2d(1, self.c_trunk, kernel_size=3, padding="same", bias=True)
+        else:
+            self.weight_mask_conv = None
         self.global_input_shape = [19]
 
         self.blocks = torch.nn.ModuleList()
@@ -1780,6 +1818,10 @@ class Model(torch.nn.Module):
             self.activation,
             self.pos_len,
         )
+        if self.config["version"] >= 18:
+            self.weighted_value_head = WeightedValueHead(self.c_trunk, self.c_v1, self.activation)
+        else:
+            self.weighted_value_head = None
         if self.has_intermediate_head:
             self.norm_intermediate_trunkfinal = NormMask(self.c_trunk, self.config, fixup_use_gamma=False, is_last_batchnorm=True)
             self.act_intermediate_trunkfinal = act(self.activation)
@@ -1829,6 +1871,8 @@ class Model(torch.nn.Module):
 
             self.policy_head.initialize()
             self.value_head.initialize()
+            if self.weighted_value_head is not None:
+                self.weighted_value_head.initialize()
             if self.has_intermediate_head:
                 self.intermediate_policy_head.initialize()
                 self.intermediate_value_head.initialize()
@@ -1850,6 +1894,10 @@ class Model(torch.nn.Module):
 
         reg_dict["normal"].append(self.conv_spatial.weight)
         reg_dict["normal"].append(self.linear_global.weight)
+        # Include weight mask conv params if present
+        if self.weight_mask_conv is not None:
+            reg_dict["normal"].append(self.weight_mask_conv.weight)
+            reg_dict["output_noreg"].append(self.weight_mask_conv.bias)
         if self.metadata_encoder is not None:
             self.metadata_encoder.add_reg_dict(reg_dict)
         for block in self.blocks:
@@ -1857,6 +1905,8 @@ class Model(torch.nn.Module):
         self.norm_trunkfinal.add_reg_dict(reg_dict)
         self.policy_head.add_reg_dict(reg_dict)
         self.value_head.add_reg_dict(reg_dict)
+        if self.weighted_value_head is not None:
+            self.weighted_value_head.add_reg_dict(reg_dict)
         if self.has_intermediate_head:
             self.norm_intermediate_trunkfinal.add_reg_dict(reg_dict)
             self.intermediate_policy_head.add_reg_dict(reg_dict)
@@ -1869,6 +1919,8 @@ class Model(torch.nn.Module):
         self.norm_trunkfinal.set_brenorm_params(renorm_avg_momentum, rmax, dmax)
         self.policy_head.set_brenorm_params(renorm_avg_momentum, rmax, dmax)
         self.value_head.set_brenorm_params(renorm_avg_momentum, rmax, dmax)
+        if self.weighted_value_head is not None:
+            self.weighted_value_head.set_brenorm_params(renorm_avg_momentum, rmax, dmax)
         if self.has_intermediate_head:
             self.norm_intermediate_trunkfinal.set_brenorm_params(renorm_avg_momentum, rmax, dmax)
             self.intermediate_policy_head.set_brenorm_params(renorm_avg_momentum, rmax, dmax)
@@ -1880,6 +1932,8 @@ class Model(torch.nn.Module):
         self.norm_trunkfinal.add_brenorm_clippage(upper_rclippage, lower_rclippage, dclippage)
         self.policy_head.add_brenorm_clippage(upper_rclippage, lower_rclippage, dclippage)
         self.value_head.add_brenorm_clippage(upper_rclippage, lower_rclippage, dclippage)
+        if self.weighted_value_head is not None:
+            self.weighted_value_head.add_brenorm_clippage(upper_rclippage, lower_rclippage, dclippage)
         if self.has_intermediate_head:
             self.norm_intermediate_trunkfinal.add_brenorm_clippage(upper_rclippage, lower_rclippage, dclippage)
             self.intermediate_policy_head.add_brenorm_clippage(upper_rclippage, lower_rclippage, dclippage)
@@ -1964,7 +2018,15 @@ class Model(torch.nn.Module):
             extra_outputs.report("trunkfinal", out)
 
         # print("MAIN")
-        out_policy = self.policy_head(out, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, extra_outputs=extra_outputs)
+        # Optional weight mask feature processing (only when version has it)
+        if self.uses_weight_mask:
+            weight_mask = input_spatial[:,22:23,:,:]
+            weight_mask_feat = self.weight_mask_conv(weight_mask)
+            out_aug = out + weight_mask_feat
+        else:
+            out_aug = out
+        # Combine with trunk output (augmented if weight mask present)
+        out_policy = self.policy_head(out_aug, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, extra_outputs=extra_outputs)
         (
             out_value,
             out_miscvalue,
@@ -1974,7 +2036,11 @@ class Model(torch.nn.Module):
             out_futurepos,
             out_seki,
             out_scorebelief_logprobs,
-        ) = self.value_head(out, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, input_global=input_global, extra_outputs=extra_outputs)
+        ) = self.value_head(out_aug, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, input_global=input_global, extra_outputs=extra_outputs)
+        if self.weighted_value_head is not None:
+            out_weighted_value = self.weighted_value_head(out_aug, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
+        else:
+            out_weighted_value = None
 
         if self.has_intermediate_head:
             return (
@@ -2002,7 +2068,7 @@ class Model(torch.nn.Module):
                 ),
             )
         else:
-            return ((
+            outputs_main = (
                 out_policy,
                 out_value,
                 out_miscvalue,
@@ -2012,13 +2078,30 @@ class Model(torch.nn.Module):
                 out_futurepos,
                 out_seki,
                 out_scorebelief_logprobs,
-            ),)
+            )
+            if out_weighted_value is not None:
+                outputs_main = outputs_main + (out_weighted_value,)
+            return (outputs_main,)
 
     def float32ify_output(self, outputs_byheads):
         return tuple(self.float32ify_single_heads_output(outputs) for outputs in outputs_byheads)
 
     def float32ify_single_heads_output(self, outputs):
-        (
+        if self.weighted_value_head is not None and len(outputs) == 10:
+            (
+                out_policy,
+                out_value,
+                out_miscvalue,
+                out_moremiscvalue,
+                out_ownership,
+                out_scoring,
+                out_futurepos,
+                out_seki,
+                out_scorebelief_logprobs,
+                out_weighted_value,
+            ) = outputs
+        else:
+            (
             out_policy,
             out_value,
             out_miscvalue,
@@ -2027,9 +2110,10 @@ class Model(torch.nn.Module):
             out_scoring,
             out_futurepos,
             out_seki,
-            out_scorebelief_logprobs,
-        ) = outputs
-        return (
+                out_scorebelief_logprobs,
+            ) = outputs
+            out_weighted_value = None
+        base = (
             out_policy.to(torch.float32),
             out_value.to(torch.float32),
             out_miscvalue.to(torch.float32),
@@ -2040,22 +2124,40 @@ class Model(torch.nn.Module):
             out_seki.to(torch.float32),
             out_scorebelief_logprobs.to(torch.float32),
         )
+        if out_weighted_value is not None:
+            base = base + (out_weighted_value.to(torch.float32),)
+        return base
 
     def postprocess_output(self, outputs_byheads):
         return tuple(self.postprocess_single_heads_output(outputs) for outputs in outputs_byheads)
 
     def postprocess_single_heads_output(self, outputs):
-        (
-            out_policy,
-            out_value,
-            out_miscvalue,
-            out_moremiscvalue,
-            out_ownership,
-            out_scoring,
-            out_futurepos,
-            out_seki,
-            out_scorebelief_logprobs,
-        ) = outputs
+        if self.weighted_value_head is not None and len(outputs) == 10:
+            (
+                out_policy,
+                out_value,
+                out_miscvalue,
+                out_moremiscvalue,
+                out_ownership,
+                out_scoring,
+                out_futurepos,
+                out_seki,
+                out_scorebelief_logprobs,
+                out_weighted_value,
+            ) = outputs
+        else:
+            (
+                out_policy,
+                out_value,
+                out_miscvalue,
+                out_moremiscvalue,
+                out_ownership,
+                out_scoring,
+                out_futurepos,
+                out_seki,
+                out_scorebelief_logprobs,
+            ) = outputs
+            out_weighted_value = None
 
         policy_logits = out_policy
         value_logits = out_value
@@ -2077,7 +2179,7 @@ class Model(torch.nn.Module):
             pred_shortterm_score_error = SoftPlusWithGradientFloorFunction.apply(out_moremiscvalue[:,1], 0.05, True) * self.shortterm_score_error_multiplier
         scorebelief_logits = out_scorebelief_logprobs
 
-        return (
+        base = (
             policy_logits,      # N, num_policy_outputs, move
             value_logits,       # N, {win,loss,noresult}
             td_value_logits,    # N, {long, mid, short} {win,loss,noresult}
@@ -2094,3 +2196,6 @@ class Model(torch.nn.Module):
             pred_shortterm_score_error, # N
             scorebelief_logits, # N, 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
         )
+        if out_weighted_value is not None:
+            base = base + (out_weighted_value.to(torch.float32),) # N,5
+        return base

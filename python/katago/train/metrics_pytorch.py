@@ -268,6 +268,24 @@ class Metrics:
         loss = huber_loss(pred, target + 1.0e-5, delta = 50.0)
         return 0.0003 * global_weight * weight * loss
 
+    # Weighted value head losses (version >=18)
+    def loss_weighted_value_samplewise(self, pred_logits, target_probs, weight, global_weight):
+        # pred_logits: (N,3) win,loss,noresult logits
+        assert pred_logits.shape == (self.n,3)
+        assert target_probs.shape == (self.n,3)
+        loss = cross_entropy(pred_logits, target_probs, dim=1)
+        return 1.20 * global_weight * weight * loss
+    def loss_weighted_score_samplewise(self, pred, target, weight, global_weight):
+        assert pred.shape == (self.n,)
+        assert target.shape == (self.n,)
+        loss = huber_loss(pred, target, delta = 12.0)
+        return 0.0015 * global_weight * weight * loss
+    def loss_weighted_lead_samplewise(self, pred, target, weight, global_weight):
+        assert pred.shape == (self.n,)
+        assert target.shape == (self.n,)
+        loss = huber_loss(pred, target, delta = 8.0)
+        return 0.0060 * global_weight * weight * loss
+
 
     def loss_shortterm_value_error_samplewise(self, pred, td_value_pred_logits, td_value_target_probs, weight, global_weight):
         td_value_pred_probs = torch.softmax(td_value_pred_logits[:,2,:],axis=1)
@@ -487,7 +505,13 @@ class Metrics:
             pred_shortterm_value_error,
             pred_shortterm_score_error,
             scorebelief_logits,
+            *optional_extra,
         ) = model_output_postprocessed
+        weighted_value_head_output = None
+        if len(optional_extra) == 1:
+            extra0 = optional_extra[0]
+            if isinstance(extra0, torch.Tensor) and extra0.ndim == 2 and extra0.shape[-1] == 5:
+                weighted_value_head_output = extra0
 
         input_binary_nchw = batch["binaryInputNCHW"]
         input_global_nc = batch["globalInputNC"]
@@ -804,6 +828,40 @@ class Metrics:
             loss_qvalues_winloss = loss_qvalues_winloss.sum()
             loss_qvalues_score = loss_qvalues_score.sum()
 
+        # Weighted value losses
+        if weighted_value_head_output is not None and raw_model.config["version"] >= 18 and "weightedValueTargetsNC" in batch:
+            weighted_targets = batch["weightedValueTargetsNC"]
+            assert weighted_targets.shape == (self.n,5)
+            target_weighted_value = weighted_targets[:,0:3]
+            target_weighted_score = weighted_targets[:,3] * self.scoremean_multiplier
+            target_weighted_lead = weighted_targets[:,4] * self.lead_multiplier
+            # Predictions: first 3 logits, then score (need to scale), then lead (scale)
+            pred_weighted_logits = weighted_value_head_output[:,0:3]
+            pred_weighted_score = weighted_value_head_output[:,3] * self.scoremean_multiplier
+            pred_weighted_lead = weighted_value_head_output[:,4] * self.lead_multiplier
+            loss_weighted_value = self.loss_weighted_value_samplewise(
+                pred_weighted_logits,
+                target_weighted_value,
+                target_weight_value,
+                global_weight,
+            ).sum()
+            loss_weighted_score = self.loss_weighted_score_samplewise(
+                pred_weighted_score,
+                target_weighted_score,
+                target_weight_ownership,
+                global_weight,
+            ).sum()
+            loss_weighted_lead = self.loss_weighted_lead_samplewise(
+                pred_weighted_lead,
+                target_weighted_lead,
+                target_weight_lead,
+                global_weight,
+            ).sum()
+        else:
+            loss_weighted_value = torch.zeros_like(loss_policy_player)
+            loss_weighted_score = torch.zeros_like(loss_policy_player)
+            loss_weighted_lead = torch.zeros_like(loss_policy_player)
+
         loss_sum = (
             loss_policy_player * policy_opt_loss_scale
             + loss_policy_opponent
@@ -830,6 +888,9 @@ class Metrics:
             + loss_shortterm_score_error
             + loss_qvalues_winloss
             + loss_qvalues_score
+            + loss_weighted_value
+            + loss_weighted_score
+            + loss_weighted_lead
         )
 
         policy_acc1 = self.accuracy1(
@@ -868,6 +929,9 @@ class Metrics:
             "esstloss_sum": loss_shortterm_score_error,
             "qwlloss_sum": loss_qvalues_winloss,
             "qscloss_sum": loss_qvalues_score,
+            "wvloss_sum": loss_weighted_value,
+            "wscoreloss_sum": loss_weighted_score,
+            "wleadloss_sum": loss_weighted_lead,
             "loss_sum": loss_sum,
             "pacc1_sum": policy_acc1,
             "vsquare_sum": square_value,

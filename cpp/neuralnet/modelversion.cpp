@@ -21,6 +21,7 @@
 //14 = V7 features, Squared softplus for error variance predictions
 //15 = V7 features, Extra nonlinearity for pass output
 //16 = V7 features, Q value predictions in the policy head
+//17 = V8 features, Weight mask for weighted scoring
 
 static void fail(int modelVersion) {
   throw StringError("NNModelVersion: Model version not currently implemented or supported: " + Global::intToString(modelVersion));
@@ -28,11 +29,13 @@ static void fail(int modelVersion) {
 
 static_assert(NNModelVersion::oldestModelVersionImplemented == 3, "");
 static_assert(NNModelVersion::oldestInputsVersionImplemented == 3, "");
-static_assert(NNModelVersion::latestModelVersionImplemented == 16, "");
-static_assert(NNModelVersion::latestInputsVersionImplemented == 7, "");
+static_assert(NNModelVersion::latestModelVersionImplemented == 18, "");
+static_assert(NNModelVersion::latestInputsVersionImplemented == 8, "");
 
 int NNModelVersion::getInputsVersion(int modelVersion) {
-  if(modelVersion >= 8 && modelVersion <= 16)
+  if(modelVersion == 17 || modelVersion == 18)
+    return 8;
+  else if(modelVersion >= 8 && modelVersion <= 16)
     return 7;
   else if(modelVersion == 7)
     return 6;
@@ -48,7 +51,9 @@ int NNModelVersion::getInputsVersion(int modelVersion) {
 }
 
 int NNModelVersion::getNumSpatialFeatures(int modelVersion) {
-  if(modelVersion >= 8 && modelVersion <= 16)
+  if(modelVersion == 17 || modelVersion == 18)
+    return NNInputs::NUM_FEATURES_SPATIAL_V8;
+  else if(modelVersion >= 8 && modelVersion <= 16)
     return NNInputs::NUM_FEATURES_SPATIAL_V7;
   else if(modelVersion == 7)
     return NNInputs::NUM_FEATURES_SPATIAL_V6;
@@ -64,7 +69,9 @@ int NNModelVersion::getNumSpatialFeatures(int modelVersion) {
 }
 
 int NNModelVersion::getNumGlobalFeatures(int modelVersion) {
-  if(modelVersion >= 8 && modelVersion <= 16)
+  if(modelVersion == 17 || modelVersion == 18)
+    return NNInputs::NUM_FEATURES_GLOBAL_V8;
+  else if(modelVersion >= 8 && modelVersion <= 16)
     return NNInputs::NUM_FEATURES_GLOBAL_V7;
   else if(modelVersion == 7)
     return NNInputs::NUM_FEATURES_GLOBAL_V6;

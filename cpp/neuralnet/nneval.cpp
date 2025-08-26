@@ -786,7 +786,7 @@ void NNEvaluator::evaluate(
     if(buf.rowMetaBuf.size() < rowMetaLen)
       buf.rowMetaBuf.resize(rowMetaLen);
 
-    static_assert(NNModelVersion::latestInputsVersionImplemented == 7, "");
+    static_assert(NNModelVersion::latestInputsVersionImplemented == 8, "");
     if(inputsVersion == 3)
       NNInputs::fillRowV3(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
     else if(inputsVersion == 4)
@@ -797,6 +797,8 @@ void NNEvaluator::evaluate(
       NNInputs::fillRowV6(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
     else if(inputsVersion == 7)
       NNInputs::fillRowV7(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
+    else if(inputsVersion == 8)
+      NNInputs::fillRowV8(board, history, nextPlayer, nnInputParams, nnXLen, nnYLen, inputsUseNHWC, buf.rowSpatialBuf.data(), buf.rowGlobalBuf.data());
     else
       ASSERT_UNREACHABLE;
 

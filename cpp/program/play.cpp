@@ -494,6 +494,12 @@ void GameInitializer::createGameSharedUnsynchronized(
     hist = initialPosition->hist;
     pla = initialPosition->pla;
 
+    // Generate weight mask for initial position games (random or uniform based on config)
+    if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
+      board.setUniformWeightMask();
+    else
+      board.generateRandomWeightMask(rand);
+
     //No handicap when starting from an initial position.
     double thisHandicapProb = 0.0;
     extraBlackAndKomi = PlayUtils::chooseExtraBlackAndKomi(
@@ -549,6 +555,13 @@ void GameInitializer::createGameSharedUnsynchronized(
     pla = startPos.nextPla;
     hist.clear(board,pla,rules,0);
     hist.setInitialTurnNumber(startPos.initialTurnNumber);
+
+    // Generate weight mask for SGF position games (random or uniform based on config)
+    if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
+      board.setUniformWeightMask();
+    else
+      board.generateRandomWeightMask(rand);
+
     Loc hintLoc = startPos.hintLoc;
     testAssert(startPos.moves.size() < 0xFFFFFF);
     for(size_t i = 0; i<startPos.moves.size(); i++) {
@@ -593,6 +606,12 @@ void GameInitializer::createGameSharedUnsynchronized(
     board = Board(xSize,ySize);
     pla = P_BLACK;
     hist.clear(board,pla,rules,0);
+
+    // Generate weight mask for new games (random or uniform based on config)
+    if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
+      board.setUniformWeightMask();
+    else
+      board.generateRandomWeightMask(rand);
 
     extraBlackAndKomi = PlayUtils::chooseExtraBlackAndKomi(
       komiMean, komiStdev, komiAllowIntegerProb,
@@ -1720,7 +1739,8 @@ FinishedGameData* Play::runGame(
     if(hist.isResignation)
       throw StringError("Recording full data currently incompatible with resignation");
 
-    ValueTargets finalValueTargets;
+  ValueTargets finalValueTargets;
+  ValueTargets finalWeightedValueTargets;
 
     assert(gameData->finalFullArea == NULL);
     assert(gameData->finalOwnership == NULL);
@@ -1735,13 +1755,15 @@ FinishedGameData* Play::runGame(
       finalValueTargets.noResult = 1.0f;
       finalValueTargets.score = 0.0f;
 
+      finalWeightedValueTargets = finalValueTargets; // identical in no-result case
+
       //Fill with empty so that we use "nobody owns anything" as the training target.
       //Although in practice actually the training normally weights by having a result or not, so it doesn't matter what we fill.
       std::fill(gameData->finalFullArea,gameData->finalFullArea+Board::MAX_ARR_SIZE,C_EMPTY);
       std::fill(gameData->finalOwnership,gameData->finalOwnership+Board::MAX_ARR_SIZE,C_EMPTY);
       std::fill(gameData->finalSekiAreas,gameData->finalSekiAreas+Board::MAX_ARR_SIZE,false);
     }
-    else {
+  else {
       //Relying on this to be idempotent, so that we can get the final territory map
       //We also do want to call this here to force-end the game if we crossed a move limit.
       hist.endAndScoreGameNow(board,gameData->finalOwnership);
@@ -1753,8 +1775,12 @@ FinishedGameData* Play::runGame(
       finalValueTargets.hasLead = true;
       finalValueTargets.lead = finalValueTargets.score;
 
+  //Weighted score computation using weight mask and final area (white positive)
+  //Compute area-based weighted score analogous to hist.finalWhiteMinusBlackScore but via Board weighted area
+  //We reuse finalFullArea after it's filled below; for weighted scoring we need territory-like map.
+
       //Fill full and seki areas
-      {
+  {
         board.calculateArea(gameData->finalFullArea, true, true, true, hist.rules.multiStoneSuicideLegal);
 
         Color* independentLifeArea = new Color[Board::MAX_ARR_SIZE];
@@ -1767,14 +1793,29 @@ FinishedGameData* Play::runGame(
             gameData->finalSekiAreas[i] = false;
         }
         delete[] independentLifeArea;
+        // After obtaining finalFullArea, compute weighted territory score
+        double weightedAreaScore = board.calculateWeightedAreaScore(gameData->finalFullArea);
+        // Adjust for komi similar to ScoreValue usage: whiteMinusBlack + komi perspective already in hist.finalWhiteMinusBlackScore
+        // hist.finalWhiteMinusBlackScore is white points - black points including komi.
+        // For weighted, approximate: weightedAreaScore + komi.
+        // Komi is from white's perspective.
+        double weightedWhiteMinusBlackScore = weightedAreaScore + hist.rules.komi; // ignoring tax nuances
+        finalWeightedValueTargets.win = (float)ScoreValue::whiteWinsOfWinner(hist.winner, gameData->drawEquivalentWinsForWhite);
+        finalWeightedValueTargets.loss = 1.0f - finalWeightedValueTargets.win;
+        finalWeightedValueTargets.noResult = 0.0f;
+        finalWeightedValueTargets.score = (float)ScoreValue::whiteScoreDrawAdjust(weightedWhiteMinusBlackScore,gameData->drawEquivalentWinsForWhite,hist);
+        finalWeightedValueTargets.hasLead = true;
+        finalWeightedValueTargets.lead = finalWeightedValueTargets.score;
       }
     }
     gameData->whiteValueTargetsByTurn.push_back(finalValueTargets);
+    gameData->weightedValueTargetsByTurn.push_back(finalWeightedValueTargets);
 
     //If we had a hintloc, then don't trust the first value, it will be corrupted a bit by the forced playouts.
     //Just copy the next turn's value.
     if(otherGameProps.hintLoc != Board::NULL_LOC) {
-      gameData->whiteValueTargetsByTurn[0] = gameData->whiteValueTargetsByTurn[std::min((size_t)1,gameData->whiteValueTargetsByTurn.size()-1)];
+  gameData->whiteValueTargetsByTurn[0] = gameData->whiteValueTargetsByTurn[std::min((size_t)1,gameData->whiteValueTargetsByTurn.size()-1)];
+  gameData->weightedValueTargetsByTurn[0] = gameData->weightedValueTargetsByTurn[std::min((size_t)1,gameData->weightedValueTargetsByTurn.size()-1)];
     }
 
     assert(gameData->finalWhiteScoring == NULL);

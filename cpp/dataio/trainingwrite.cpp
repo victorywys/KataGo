@@ -88,6 +88,7 @@ FinishedGameData::FinishedGameData()
    policyTargetsByTurn(),
    whiteValueTargetsByTurn(),
    whiteQValueTargetsByTurn(),
+  weightedValueTargetsByTurn(),
    nnRawStatsByTurn(),
    finalFullArea(NULL),
    finalOwnership(NULL),
@@ -171,6 +172,16 @@ void FinishedGameData::printDebug(ostream& out) const {
       out << whiteValueTargetsByTurn[i].lead << " ";
     else
       out << "-" << " ";
+    out << endl;
+  }
+  for(int i = 0; i<weightedValueTargetsByTurn.size(); i++) {
+    out << "weightedValueTargetsByTurn " << i << " ";
+    out << weightedValueTargetsByTurn[i].win << " ";
+    out << weightedValueTargetsByTurn[i].loss << " ";
+    out << weightedValueTargetsByTurn[i].noResult << " ";
+    out << weightedValueTargetsByTurn[i].score << " ";
+    if(weightedValueTargetsByTurn[i].hasLead)
+      out << weightedValueTargetsByTurn[i].lead << " ";
     out << endl;
   }
 
@@ -283,7 +294,8 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    scoreDistrN({maxRws, xLen*yLen*2+NNPos::EXTRA_SCORE_DISTR_RADIUS*2}),
    valueTargetsNCHW({maxRws, VALUE_SPATIAL_TARGET_NUM_CHANNELS, yLen, xLen}),
    qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, NNPos::getPolicySize(xLen,yLen)}),
-   metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS})
+  metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS}),
+  weightedValueTargetsNC({maxRws,5})
 {
   binaryInputNCHWUnpacked = new float[numBChannels * xLen * yLen];
 }
@@ -447,6 +459,8 @@ void TrainingWriteBuffers::addRow(
   const vector<ValueTargets>& whiteValueTargets,
   const vector<QValueTargets>& whiteQValueTargets,
   int whiteValueTargetsIdx, //index in whiteValueTargets corresponding to this turn.
+  const std::vector<ValueTargets>* weightedValueTargets,
+  int weightedValueTargetsIdx,
   float valueTargetWeight,
   float tdValueTargetWeight,
   float leadTargetWeightFactor,
@@ -469,8 +483,9 @@ void TrainingWriteBuffers::addRow(
   SGFMetadata* sgfMeta,
   Rand& rand
 ) {
-  static_assert(NNModelVersion::latestInputsVersionImplemented == 7, "");
-  if(inputsVersion < 3 || inputsVersion > 7)
+  static_assert(NNModelVersion::latestInputsVersionImplemented == 8, "");
+  // Updated to allow inputsVersion 8 (weight mask feature). Keep lower bound same.
+  if(inputsVersion < 3 || inputsVersion > 8)
     throw StringError("Training write buffers: Does not support input version: " + Global::intToString(inputsVersion));
 
   int posArea = dataXLen*dataYLen;
@@ -490,7 +505,7 @@ void TrainingWriteBuffers::addRow(
     bool inputsUseNHWC = false;
     float* rowBin = binaryInputNCHWUnpacked;
     float* rowGlobal = globalInputNC.data + curRows * numGlobalChannels;
-    static_assert(NNModelVersion::latestInputsVersionImplemented == 7, "");
+  static_assert(NNModelVersion::latestInputsVersionImplemented == 8, "");
     if(inputsVersion == 3) {
       assert(NNInputs::NUM_FEATURES_SPATIAL_V3 == numBinaryChannels);
       assert(NNInputs::NUM_FEATURES_GLOBAL_V3 == numGlobalChannels);
@@ -515,6 +530,11 @@ void TrainingWriteBuffers::addRow(
       assert(NNInputs::NUM_FEATURES_SPATIAL_V7 == numBinaryChannels);
       assert(NNInputs::NUM_FEATURES_GLOBAL_V7 == numGlobalChannels);
       NNInputs::fillRowV7(board, hist, nextPlayer, nnInputParams, dataXLen, dataYLen, inputsUseNHWC, rowBin, rowGlobal);
+    }
+    else if(inputsVersion == 8) {
+      assert(NNInputs::NUM_FEATURES_SPATIAL_V8 == numBinaryChannels);
+      assert(NNInputs::NUM_FEATURES_GLOBAL_V8 == numGlobalChannels);
+      NNInputs::fillRowV8(board, hist, nextPlayer, nnInputParams, dataXLen, dataYLen, inputsUseNHWC, rowBin, rowGlobal);
     }
     else
       ASSERT_UNREACHABLE;
@@ -609,6 +629,24 @@ void TrainingWriteBuffers::addRow(
   rowGlobal[32] = (float)searchEntropy;
   // Value weight
   rowGlobal[35] = (float)(1.0f - valueTargetWeight);
+
+  // Weighted value targets dataset row
+  {
+    const ValueTargets* wvtVec = nullptr;
+    int wvtIndex = whiteValueTargetsIdx;
+    if(weightedValueTargets != NULL && weightedValueTargetsIdx >=0 && weightedValueTargetsIdx < weightedValueTargets->size()) {
+      wvtVec = &((*weightedValueTargets)[weightedValueTargetsIdx]);
+      wvtIndex = weightedValueTargetsIdx;
+    }
+    const ValueTargets& wvt = (wvtVec != nullptr) ? *wvtVec : whiteValueTargets[whiteValueTargetsIdx];
+    float* rowWeighted = weightedValueTargetsNC.data + curRows * 5;
+    //Perspective of nextPlayer, flip like score/lead
+    rowWeighted[0] = nextPlayer == P_WHITE ? wvt.win : wvt.loss; // win prob for current player
+    rowWeighted[1] = nextPlayer == P_WHITE ? wvt.loss : wvt.win; // loss prob for current player
+    rowWeighted[2] = wvt.noResult;
+    rowWeighted[3] = nextPlayer == P_WHITE ? wvt.score : -wvt.score;
+    rowWeighted[4] = (wvt.hasLead ? (nextPlayer == P_WHITE ? wvt.lead : -wvt.lead) : 0.0f);
+  }
 
   //Fill in whether we should use history or not
   bool useHist0 = rand.nextDouble() < 0.98;
@@ -847,6 +885,9 @@ void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
   numBytes = qValueTargetsNCMove.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("qValueTargetsNCMove", qValueTargetsNCMove.dataIncludingHeader, numBytes);
 
+  numBytes = weightedValueTargetsNC.prepareHeaderWithNumRows(curRows);
+  zipFile.writeBuffer("weightedValueTargetsNC", weightedValueTargetsNC.dataIncludingHeader, numBytes);
+
   if(hasMetadataInput) {
     numBytes = metadataInputNC.prepareHeaderWithNumRows(curRows);
     zipFile.writeBuffer("metadataInputNC", metadataInputNC.dataIncludingHeader, numBytes);
@@ -939,6 +980,16 @@ void TrainingWriteBuffers::writeToTextOstream(ostream& out) {
   }
   out << endl;
 
+  out << "weightedValueTargetsNC" << endl;
+  weightedValueTargetsNC.prepareHeaderWithNumRows(curRows);
+  printHeader((const char*)weightedValueTargetsNC.dataIncludingHeader);
+  len = weightedValueTargetsNC.getActualDataLen(curRows);
+  for(int i = 0; i<len; i++) {
+    out << weightedValueTargetsNC.data[i] << " ";
+    if((i+1) % (len/curRows) == 0) out << endl;
+  }
+  out << endl;
+
   if(hasMetadataInput) {
     out << "metadataInputNC" << endl;
     metadataInputNC.prepareHeaderWithNumRows(curRows);
@@ -968,7 +1019,7 @@ TrainingDataWriter::TrainingDataWriter(const string& outDir, ostream* dbgOut, in
   int numGlobalChannels;
   //Note that this inputsVersion is for data writing, it might be different than the inputsVersion used
   //to feed into a model during selfplay
-  static_assert(NNModelVersion::latestInputsVersionImplemented == 7, "");
+  static_assert(NNModelVersion::latestInputsVersionImplemented == 8, "");
   if(inputsVersion == 3) {
     numBinaryChannels = NNInputs::NUM_FEATURES_SPATIAL_V3;
     numGlobalChannels = NNInputs::NUM_FEATURES_GLOBAL_V3;
@@ -988,6 +1039,10 @@ TrainingDataWriter::TrainingDataWriter(const string& outDir, ostream* dbgOut, in
   else if(inputsVersion == 7) {
     numBinaryChannels = NNInputs::NUM_FEATURES_SPATIAL_V7;
     numGlobalChannels = NNInputs::NUM_FEATURES_GLOBAL_V7;
+  }
+  else if(inputsVersion == 8) {
+    numBinaryChannels = NNInputs::NUM_FEATURES_SPATIAL_V8;
+    numGlobalChannels = NNInputs::NUM_FEATURES_GLOBAL_V8;
   }
   else {
     throw StringError("TrainingDataWriter: Unsupported inputs version: " + Global::intToString(inputsVersion));
@@ -1167,6 +1222,8 @@ void TrainingDataWriter::writeGame(const FinishedGameData& data) {
             data.whiteValueTargetsByTurn,
             data.whiteQValueTargetsByTurn,
             turnAfterStart,
+            &data.weightedValueTargetsByTurn,
+            turnAfterStart,
             valueTargetWeight,
             tdValueTargetWeight,
             leadTargetWeightFactor,
@@ -1239,6 +1296,8 @@ void TrainingDataWriter::writeGame(const FinishedGameData& data) {
             sp->searchEntropy,
             whiteValueTargetsBuf,
             whiteQValueTargetsBuf,
+            0,
+            NULL,
             0,
             valueTargetWeight,
             tdValueTargetWeight,

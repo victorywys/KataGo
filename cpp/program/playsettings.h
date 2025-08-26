@@ -90,6 +90,9 @@ struct PlaySettings {
   //Record time taken per move
   bool recordTimePerMove;
 
+  //Probability to override a random weight mask with a uniform all-1 mask (except walls)
+  double weightMaskUniformProb;
+
   PlaySettings();
   ~PlaySettings();
 
