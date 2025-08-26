@@ -236,8 +236,9 @@ struct Search {
   void setCopyOfExternalPatternBonusTable(const std::unique_ptr<PatternBonusTable>& table);
   void setNNEval(NNEvaluator* nnEval);
   void setBoardWeights(const float* weights);
-  void setBoardWeightsbyPos(const Loc pos, const float weight);
+  void setBoardWeightsbyPos(const int pos, const float weight);
   void setLogBoardWeights(bool enabled);
+  void syncWeightsToBoard(); // Sync search weights to board weight_mask
 
   //If the number of threads is reduced, this can free up some excess threads in the thread pool.
   //Calling this is never necessary, it may just reduce some resource use.

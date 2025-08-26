@@ -309,7 +309,7 @@ void Search::setBoardWeights(const float* weights) {
   std::copy(weights, weights + size, boardWeights); // Copy new weights
 }
 
-void Search::setBoardWeightsbyPos(const Loc pos, const float weight) {
+void Search::setBoardWeightsbyPos(const int pos, const float weight) {
   if (boardWeights == NULL) {
     boardWeights = new float[nnXLen * nnYLen];
     std::fill(boardWeights, boardWeights + nnXLen * nnYLen, 1.0f); // Initialize to zero if not already set
@@ -319,6 +319,27 @@ void Search::setBoardWeightsbyPos(const Loc pos, const float weight) {
 
 void Search::setLogBoardWeights(bool enabled) {
   logBoardWeights = enabled;
+}
+
+void Search::syncWeightsToBoard() {
+  if (boardWeights != NULL) {
+    // Initialize all board weights to 1.0 first
+    for (int i = 0; i < Board::MAX_ARR_SIZE; i++) {
+      rootBoard.weight_mask[i] = 1.0f;
+    }
+    
+    // Convert from NN coordinate system to board coordinate system
+    for (int y = 0; y < rootBoard.y_size; y++) {
+      for (int x = 0; x < rootBoard.x_size; x++) {
+        Loc boardLoc = Location::getLoc(x, y, rootBoard.x_size);
+        int nnPos = NNPos::locToPos(boardLoc, rootBoard.x_size, nnXLen, nnYLen);
+        
+        if (nnPos >= 0 && nnPos < nnXLen * nnYLen) {
+          rootBoard.weight_mask[boardLoc] = boardWeights[nnPos];
+        }
+      }
+    }
+  }
 }
 
 void Search::clearSearch() {

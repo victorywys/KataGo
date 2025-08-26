@@ -106,6 +106,9 @@ static const vector<string> knownCommands = {
 
   //Board weight commands
   "boardweight",
+  "kata-query-policy",
+  "kata-show-weights",
+  "kata-test-nn-weights",
 
   //Stop any ongoing ponder or analyze
   "stop",
@@ -2383,12 +2386,241 @@ int MainCmds::gtp(const vector<string>& args) {
           Search* search = engine->bot->getSearchStopAndWait();
           int pos = search->getPos(loc);
           search->setBoardWeightsbyPos(pos, weight);
+          search->syncWeightsToBoard(); // Sync weights to board for NN input
           
           if(logBoardWeights) {
             logger.write("GTP boardweight: Set weight at " + pieces[0] + " (pos=" + Global::intToString(pos) + ") to " + Global::floatToString(weight));
           }
           
           response = "Set board weight at " + pieces[0] + " to " + Global::floatToString(weight);
+        }
+      }
+    }
+
+    else if(command == "kata-query-policy") {
+      if(pieces.size() < 1 || pieces.size() > 10) {
+        responseIsError = true;
+        response = "Expected 1-10 arguments for kata-query-policy (moves to check) but got '" + Global::concat(pieces," ") + "'";
+      }
+      else {
+        Board board = engine->bot->getRootBoard();
+        BoardHistory hist = engine->bot->getRootHist();
+        Player nextPla = engine->bot->getRootPla();
+        
+        // Get neural network evaluation for current position
+        MiscNNInputParams nnInputParams;
+        nnInputParams.drawEquivalentWinsForWhite = engine->getGenmoveParams().drawEquivalentWinsForWhite;
+        
+        NNResultBuf buf;
+        bool skipCache = true;
+        bool includeOwnerMap = true;
+        engine->nnEval->evaluate(board, hist, nextPla, nnInputParams, buf, skipCache, includeOwnerMap);
+        
+        NNOutput* nnOutput = buf.result.get();
+        
+        int nnXLen = engine->nnEval->getNNXLen();
+        int nnYLen = engine->nnEval->getNNYLen();
+        
+        ostringstream sout;
+        sout << "Policy values for requested moves:" << endl;
+        
+        for(size_t i = 0; i < pieces.size(); i++) {
+          Loc loc;
+          bool locSuccess = tryParseLoc(pieces[i], board, loc);
+          if(!locSuccess) {
+            sout << pieces[i] << ": INVALID" << endl;
+            continue;
+          }
+          
+          int pos = NNPos::locToPos(loc, board.x_size, nnXLen, nnYLen);
+          if(pos < 0 || pos >= NNPos::getPolicySize(nnXLen, nnYLen)) {
+            sout << pieces[i] << ": OUT_OF_BOUNDS" << endl;
+            continue;
+          }
+          
+          float policyProb = nnOutput->policyProbs[pos];
+          sout << pieces[i] << ": " << Global::doubleToString(policyProb) << endl;
+        }
+        
+        // Also show top 5 policy moves for comparison
+        vector<pair<Loc,float>> locAndProbs;
+        for(int movePos = 0; movePos<NNPos::getPolicySize(nnXLen,nnYLen); movePos++) {
+          Loc moveLoc = NNPos::posToLoc(movePos,board.x_size,board.y_size,nnXLen,nnYLen);
+          if(moveLoc != Board::PASS_LOC && !board.isLegal(moveLoc,nextPla,engine->getCurrentRules().multiStoneSuicideLegal))
+            continue;
+          float prob = nnOutput->policyProbs[movePos];
+          locAndProbs.push_back(make_pair(moveLoc,prob));
+        }
+        std::sort(locAndProbs.begin(), locAndProbs.end(), [](const pair<Loc,float>& a, const pair<Loc,float>& b) {
+          return a.second > b.second;
+        });
+        
+        sout << "Top 5 moves:" << endl;
+        for(int i = 0; i < std::min(5, (int)locAndProbs.size()); i++) {
+          Loc moveLoc = locAndProbs[i].first;
+          float prob = locAndProbs[i].second;
+          sout << Location::toString(moveLoc, board) << ": " << Global::doubleToString(prob) << endl;
+        }
+        
+        response = sout.str();
+      }
+    }
+
+    else if(command == "kata-show-weights") {
+      if(pieces.size() != 0) {
+        responseIsError = true;
+        response = "Expected no arguments for kata-show-weights but got '" + Global::concat(pieces," ") + "'";
+      }
+      else {
+        Search* search = engine->bot->getSearchStopAndWait();
+        Board board = engine->bot->getRootBoard();
+        
+        ostringstream sout;
+        sout << "Current board weights:" << endl;
+        
+        // Check both search weights and board weights
+        bool hasSearchWeights = (search->boardWeights != NULL);
+        sout << "Search weights array: " << (hasSearchWeights ? "ALLOCATED" : "NULL") << endl;
+        
+        int nonDefaultCount = 0;
+        float totalWeight = 0.0f;
+        
+        for(int y = 0; y < board.y_size; y++) {
+          for(int x = 0; x < board.x_size; x++) {
+            Loc loc = Location::getLoc(x, y, board.x_size);
+            float boardWeight = board.weight_mask[loc];
+            totalWeight += boardWeight;
+            
+            if(boardWeight != 1.0f) {
+              sout << Location::toString(loc, board) << ": " << Global::floatToString(boardWeight) << endl;
+              nonDefaultCount++;
+            }
+          }
+        }
+        
+        sout << "Non-default weights: " << nonDefaultCount << "/" << (board.x_size * board.y_size) << endl;
+        sout << "Total weight: " << Global::floatToString(totalWeight) << endl;
+        sout << "Expected total (if all 1.0): " << (board.x_size * board.y_size) << endl;
+        
+        response = sout.str();
+      }
+    }
+
+    else if(command == "kata-test-nn-weights") {
+      if(pieces.size() < 1 || pieces.size() > 10) {
+        responseIsError = true;
+        response = "Expected 1-10 arguments for kata-test-nn-weights (positions to weight) but got '" + Global::concat(pieces," ") + "'";
+      }
+      else {
+        Search* search = engine->bot->getSearchStopAndWait();
+        Board board = engine->bot->getRootBoard();
+        BoardHistory hist = engine->bot->getRootHist();
+        Player pla = engine->bot->getRootPla();
+        
+        // Parse weight positions
+        vector<Loc> weightLocs;
+        for(size_t i = 0; i < pieces.size(); i++) {
+          Loc loc;
+          if(!tryParseLoc(pieces[i], board, loc)) {
+            responseIsError = true;
+            response = "Could not parse position: " + pieces[i];
+            break;
+          }
+          weightLocs.push_back(loc);
+        }
+        
+        if(!responseIsError) {
+          ostringstream sout;
+          sout << "Neural Network Weight Test Results:" << endl;
+          sout << "===================================" << endl;
+          
+          // Test 1: Get baseline policy without weights
+          sout << endl << "1. BASELINE (no weights):" << endl;
+          
+          // Clear all weights first by setting them to 1.0
+          for(int y = 0; y < board.y_size; y++) {
+            for(int x = 0; x < board.x_size; x++) {
+              Loc loc = Location::getLoc(x, y, board.x_size);
+              search->setBoardWeightsbyPos(loc, 1.0f);
+            }
+          }
+          search->syncWeightsToBoard();
+          
+          // Get NN evaluation directly
+          NNResultBuf buf;
+          MiscNNInputParams nnInputParams;
+          nnInputParams.drawEquivalentWinsForWhite = 0.5;
+          
+          bool includeOwnerMap = false;
+          NNEvaluator* evaluator = engine->nnEval;
+          int nnXLen = evaluator->getNNXLen();
+          int nnYLen = evaluator->getNNYLen();
+          
+          evaluator->evaluate(board, hist, pla, nnInputParams, buf, includeOwnerMap, false);
+          
+          // Show policy for test positions
+          const float* policyProbs = buf.result->policyProbs;
+          for(Loc loc : weightLocs) {
+            if(board.isLegal(loc, pla, engine->getCurrentRules().multiStoneSuicideLegal)) {
+              int pos = NNPos::locToPos(loc, board.x_size, nnXLen, nnYLen);
+              sout << Location::toString(loc, board) << ": " << Global::floatToString(policyProbs[pos]) << endl;
+            }
+          }
+          
+          // Test 2: Apply high weights and test again
+          sout << endl << "2. WITH HIGH WEIGHTS (3.0x):" << endl;
+          
+          // Set high weights on test positions
+          for(Loc loc : weightLocs) {
+            search->setBoardWeightsbyPos(loc, 3.0f);
+          }
+          search->syncWeightsToBoard();
+          
+          // Get NN evaluation with weights
+          NNResultBuf buf2;
+          evaluator->evaluate(board, hist, pla, nnInputParams, buf2, includeOwnerMap, false);
+          
+          // Show policy for test positions with weights
+          const float* policyProbs2 = buf2.result->policyProbs;
+          for(Loc loc : weightLocs) {
+            if(board.isLegal(loc, pla, engine->getCurrentRules().multiStoneSuicideLegal)) {
+              int pos = NNPos::locToPos(loc, board.x_size, nnXLen, nnYLen);
+              float baseline = policyProbs[pos];
+              float weighted = policyProbs2[pos];
+              float ratio = (baseline > 0) ? (weighted / baseline) : 0.0f;
+              
+              sout << Location::toString(loc, board) << ": " << Global::floatToString(weighted) 
+                   << " (ratio: " << Global::floatToString(ratio) << ")" << endl;
+            }
+          }
+          
+          // Test 3: Show weight mask channel statistics
+          sout << endl << "3. WEIGHT MASK VERIFICATION:" << endl;
+          
+          // Check if weight mask has non-default values
+          int nonDefaultWeights = 0;
+          float totalWeight = 0.0f;
+          for(int y = 0; y < board.y_size; y++) {
+            for(int x = 0; x < board.x_size; x++) {
+              Loc loc = Location::getLoc(x, y, board.x_size);
+              float weight = board.weight_mask[loc];
+              totalWeight += weight;
+              if(weight != 1.0f) nonDefaultWeights++;
+            }
+          }
+          
+          sout << "Non-default weights in mask: " << nonDefaultWeights << endl;
+          sout << "Total weight: " << Global::floatToString(totalWeight) << endl;
+          sout << "Weight mask status: " << (nonDefaultWeights > 0 ? "ACTIVE" : "INACTIVE") << endl;
+          
+          // Model version check
+          sout << endl << "4. MODEL COMPATIBILITY:" << endl;
+          sout << "NN input size: " << nnXLen << "x" << nnYLen << endl;
+          
+          // Note: We can't easily check numSpatialFeatures from here, but we can check model behavior
+          sout << "Model file: " << cfg.getString("modelFile") << endl;
+          
+          response = sout.str();
         }
       }
     }

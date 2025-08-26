@@ -3060,6 +3060,8 @@ void NNInputs::fillRowV8(
   }
 
   //Feature 22 - Weight mask for weighted scoring
+  float totalWeight = 0.0f;
+  int nonZeroWeights = 0;
   for(int y = 0; y<ySize; y++) {
     for(int x = 0; x<xSize; x++) {
       int pos = NNPos::xyToPos(x,y,nnXLen);
@@ -3067,6 +3069,23 @@ void NNInputs::fillRowV8(
       // Normalize weight to [0, 1] range for neural network input
       float normalizedWeight = board.weight_mask[loc];
       setRowBin(rowBin,pos,22, normalizedWeight, posStride, featureStride);
+      
+      // Collect stats for logging
+      totalWeight += normalizedWeight;
+      if(normalizedWeight != 1.0f) nonZeroWeights++;
+    }
+  }
+  
+  // TODO: Add configurable logging flag from search context
+  // For now, log if there are non-default weights
+  if(nonZeroWeights > 0) {
+    // This will print to stderr - useful for debugging
+    // In production, this should be controlled by a logging flag
+    static int logCount = 0;
+    if(logCount < 5) {
+      std::cerr << "NN Input: Weight mask active - total=" << totalWeight 
+                << ", non-default=" << nonZeroWeights << "/" << (xSize*ySize) << std::endl;
+      logCount++;
     }
   }
 
