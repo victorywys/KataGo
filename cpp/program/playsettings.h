@@ -92,6 +92,8 @@ struct PlaySettings {
 
   //Probability to override a random weight mask with a uniform all-1 mask (except walls)
   double weightMaskUniformProb;
+  //Probability to use diverse weight masks instead of simple random
+  double weightMaskDiverseProb;
 
   PlaySettings();
   ~PlaySettings();

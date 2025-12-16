@@ -93,3 +93,4 @@ cpp/include/KataGoSwift/KataGoSwift-swift.h
 
 cpp/test_output_selfplay
 python/selfplay/selfplay*
+configs/

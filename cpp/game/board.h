@@ -262,6 +262,14 @@ struct Board
 
   //Generate random weight mask for weighted scoring
   void generateRandomWeightMask(Rand& rand);
+  //Generate diverse weight masks for training
+  void generateDiverseWeightMask(Rand& rand);
+  //Generate local area-based weight masks
+  void generateLocalAreaWeightMask(Rand& rand);
+  //Generate group-based weight masks
+  void generateGroupWeightMask(Rand& rand);
+  //Generate corner/side emphasis weight masks
+  void generateRegionWeightMask(Rand& rand);
   //Set weight mask to uniform weights (all 1.0)
   void setUniformWeightMask();
   //Copy weight mask from another board

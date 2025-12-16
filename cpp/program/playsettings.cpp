@@ -113,6 +113,8 @@ PlaySettings PlaySettings::loadForSelfplay(ConfigParser& cfg, bool isDistributed
 
   //Probability of using a uniform (all-1) weight mask instead of randomized mask
   playSettings.weightMaskUniformProb = cfg.contains("weightMaskUniformProb") ? cfg.getDouble("weightMaskUniformProb",0.0,1.0) : 0.30;
+  //Probability of using diverse weight masks (local areas, groups, regions) instead of simple random
+  playSettings.weightMaskDiverseProb = cfg.contains("weightMaskDiverseProb") ? cfg.getDouble("weightMaskDiverseProb",0.0,1.0) : 0.50;
 
   if(playSettings.policySurpriseDataWeight + playSettings.valueSurpriseDataWeight > 1.0)
     throw StringError("policySurpriseDataWeight + valueSurpriseDataWeight > 1.0");

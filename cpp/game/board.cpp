@@ -2866,6 +2866,343 @@ void Board::generateRandomWeightMask(Rand& rand) {
   }
 }
 
+void Board::generateDiverseWeightMask(Rand& rand) {
+  // Choose mask type randomly: 
+  // 25% original random, 25% local areas, 25% groups, 25% regions
+  int maskType = rand.nextInt(0, 3);
+  
+  switch(maskType) {
+    case 0:
+      generateRandomWeightMask(rand);
+      break;
+    case 1:
+      generateLocalAreaWeightMask(rand);
+      break;
+    case 2:
+      generateGroupWeightMask(rand);
+      break;
+    case 3:
+      generateRegionWeightMask(rand);
+      break;
+    default:
+      generateRandomWeightMask(rand);
+      break;
+  }
+}
+
+void Board::generateLocalAreaWeightMask(Rand& rand) {
+  // Start with uniform base
+  setUniformWeightMask();
+  
+  // Generate 1-3 local circular/square areas with different weights
+  int numAreas = 1 + rand.nextInt(0, 2);
+  
+  for(int area = 0; area < numAreas; area++) {
+    // Random center point
+    int centerX = rand.nextInt(0, x_size - 1);
+    int centerY = rand.nextInt(0, y_size - 1);
+    
+    // Random radius (1-4 points from center)
+    int radius = 1 + rand.nextInt(0, 3);
+    
+    // Random weight for this area [0.2, 2.0] with bias toward extremes
+    float areaWeight;
+    if(rand.nextBool(0.3)) {
+      areaWeight = 0.2f + (float)rand.nextDouble() * 0.3f; // Low weight [0.2, 0.5]
+    } else if(rand.nextBool(0.5)) {
+      areaWeight = 1.5f + (float)rand.nextDouble() * 0.5f; // High weight [1.5, 2.0]
+    } else {
+      areaWeight = 0.5f + (float)rand.nextDouble(); // Normal range [0.5, 1.5]
+    }
+    
+    // Apply weight to circular area
+    for(int y = 0; y < y_size; y++) {
+      for(int x = 0; x < x_size; x++) {
+        int dx = x - centerX;
+        int dy = y - centerY;
+        int distSquared = dx*dx + dy*dy;
+        
+        if(distSquared <= radius*radius) {
+          Loc loc = Location::getLoc(x,y,x_size);
+          if(colors[loc] != C_WALL) {
+            weight_mask[loc] = areaWeight;
+          }
+        }
+      }
+    }
+  }
+}
+
+void Board::generateGroupWeightMask(Rand& rand) {
+  // Start with uniform base
+  setUniformWeightMask();
+  
+  // Find existing stone groups and randomly weight them
+  vector<Loc> processedLocs;
+  vector<vector<Loc>> groups;
+  
+  for(int y = 0; y < y_size; y++) {
+    for(int x = 0; x < x_size; x++) {
+      Loc loc = Location::getLoc(x,y,x_size);
+      if(colors[loc] == C_BLACK || colors[loc] == C_WHITE) {
+        // Check if this location is already processed
+        bool alreadyProcessed = false;
+        for(Loc processedLoc : processedLocs) {
+          if(processedLoc == loc) {
+            alreadyProcessed = true;
+            break;
+          }
+        }
+        
+        if(!alreadyProcessed) {
+          // Find connected group
+          vector<Loc> group;
+          vector<Loc> toVisit;
+          toVisit.push_back(loc);
+          Color groupColor = colors[loc];
+          
+          while(!toVisit.empty()) {
+            Loc current = toVisit.back();
+            toVisit.pop_back();
+            
+            if(colors[current] == groupColor) {
+              group.push_back(current);
+              processedLocs.push_back(current);
+              
+              // Add adjacent locations using board's adj_offsets
+              for(int dir = 0; dir < 4; dir++) {
+                Loc adj = current + adj_offsets[dir];
+                if(colors[adj] == groupColor) {
+                  // Check if not already in group or toVisit
+                  bool found = false;
+                  for(Loc groupLoc : group) {
+                    if(groupLoc == adj) { found = true; break; }
+                  }
+                  for(Loc visitLoc : toVisit) {
+                    if(visitLoc == adj) { found = true; break; }
+                  }
+                  if(!found) {
+                    toVisit.push_back(adj);
+                  }
+                }
+              }
+            }
+          }
+          
+          if(group.size() > 0) {
+            groups.push_back(group);
+          }
+        }
+      }
+    }
+  }
+  
+  // Randomly weight groups
+  for(auto& group : groups) {
+    if(rand.nextBool(0.6)) { // 60% chance to modify group weight
+      float groupWeight;
+      if(rand.nextBool(0.4)) {
+        groupWeight = 0.1f + (float)rand.nextDouble() * 0.4f; // Low weight [0.1, 0.5]
+      } else {
+        groupWeight = 1.5f + (float)rand.nextDouble() * 0.8f; // High weight [1.5, 2.3]
+      }
+      
+      for(Loc groupLoc : group) {
+        weight_mask[groupLoc] = groupWeight;
+        
+        // Also affect nearby empty points (1-2 points away)
+        if(rand.nextBool(0.7)) {
+          int reach = 1 + rand.nextInt(0, 1);
+          for(int dy = -reach; dy <= reach; dy++) {
+            for(int dx = -reach; dx <= reach; dx++) {
+              if(dx == 0 && dy == 0) continue;
+              
+              int newX = Location::getX(groupLoc, x_size) + dx;
+              int newY = Location::getY(groupLoc, x_size) + dy;
+              
+              if(newX >= 0 && newX < x_size && newY >= 0 && newY < y_size) {
+                Loc nearbyLoc = Location::getLoc(newX, newY, x_size);
+                if(colors[nearbyLoc] == C_EMPTY && weight_mask[nearbyLoc] == 1.0f) {
+                  weight_mask[nearbyLoc] = groupWeight * 0.7f + 0.3f; // Diluted influence
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+void Board::generateRegionWeightMask(Rand& rand) {
+  // Start with uniform base
+  setUniformWeightMask();
+  
+  // Choose region type
+  int regionType = rand.nextInt(0, 5);
+  
+  switch(regionType) {
+    case 0: { // Corner emphasis
+      int corner = rand.nextInt(0, 3); // 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right
+      float cornerWeight = rand.nextBool(0.5) ? (0.2f + (float)rand.nextDouble() * 0.3f) : (1.5f + (float)rand.nextDouble() * 0.5f);
+      int cornerSize = 3 + rand.nextInt(0, min(x_size/3, y_size/3) - 1);
+      
+      for(int y = 0; y < cornerSize && y < y_size; y++) {
+        for(int x = 0; x < cornerSize && x < x_size; x++) {
+          int realX, realY;
+          switch(corner) {
+            case 0: realX = x; realY = y; break;
+            case 1: realX = x_size - 1 - x; realY = y; break;
+            case 2: realX = x; realY = y_size - 1 - y; break;
+            case 3: realX = x_size - 1 - x; realY = y_size - 1 - y; break;
+            default: realX = x; realY = y; break;
+          }
+          
+          if(realX >= 0 && realX < x_size && realY >= 0 && realY < y_size) {
+            Loc loc = Location::getLoc(realX, realY, x_size);
+            if(colors[loc] != C_WALL) {
+              weight_mask[loc] = cornerWeight;
+            }
+          }
+        }
+      }
+      break;
+    }
+    
+    case 1: { // Side emphasis
+      int side = rand.nextInt(0, 3); // 0=top, 1=right, 2=bottom, 3=left
+      float sideWeight = rand.nextBool(0.5) ? (0.3f + (float)rand.nextDouble() * 0.4f) : (1.4f + (float)rand.nextDouble() * 0.6f);
+      int sideWidth = 2 + rand.nextInt(0, 3);
+      
+      for(int y = 0; y < y_size; y++) {
+        for(int x = 0; x < x_size; x++) {
+          bool inSide = false;
+          switch(side) {
+            case 0: inSide = (y < sideWidth); break;
+            case 1: inSide = (x >= x_size - sideWidth); break;
+            case 2: inSide = (y >= y_size - sideWidth); break;
+            case 3: inSide = (x < sideWidth); break;
+            default: inSide = false; break;
+          }
+          
+          if(inSide) {
+            Loc loc = Location::getLoc(x, y, x_size);
+            if(colors[loc] != C_WALL) {
+              weight_mask[loc] = sideWeight;
+            }
+          }
+        }
+      }
+      break;
+    }
+    
+    case 2: { // Center emphasis
+      float centerWeight = rand.nextBool(0.5) ? (0.2f + (float)rand.nextDouble() * 0.4f) : (1.6f + (float)rand.nextDouble() * 0.4f);
+      int centerRadius = 2 + rand.nextInt(0, min(x_size/4, y_size/4) - 1);
+      int centerX = x_size / 2;
+      int centerY = y_size / 2;
+      
+      for(int y = 0; y < y_size; y++) {
+        for(int x = 0; x < x_size; x++) {
+          int dx = x - centerX;
+          int dy = y - centerY;
+          if(dx*dx + dy*dy <= centerRadius*centerRadius) {
+            Loc loc = Location::getLoc(x, y, x_size);
+            if(colors[loc] != C_WALL) {
+              weight_mask[loc] = centerWeight;
+            }
+          }
+        }
+      }
+      break;
+    }
+    
+    case 3: { // Diagonal strip
+      float stripWeight = 0.3f + (float)rand.nextDouble() * 1.4f;
+      bool mainDiag = rand.nextBool(0.5); // true for main diagonal, false for anti-diagonal
+      int stripWidth = 1 + rand.nextInt(0, 2);
+      
+      for(int y = 0; y < y_size; y++) {
+        for(int x = 0; x < x_size; x++) {
+          int distFromDiag;
+          if(mainDiag) {
+            distFromDiag = abs(x - y);
+          } else {
+            distFromDiag = abs(x - (y_size - 1 - y));
+          }
+          
+          if(distFromDiag <= stripWidth) {
+            Loc loc = Location::getLoc(x, y, x_size);
+            if(colors[loc] != C_WALL) {
+              weight_mask[loc] = stripWeight;
+            }
+          }
+        }
+      }
+      break;
+    }
+    
+    case 4: { // Random horizontal/vertical strips
+      float stripWeight = 0.2f + (float)rand.nextDouble() * 1.6f;
+      bool isHorizontal = rand.nextBool(0.5);
+      int numStrips = 1 + rand.nextInt(0, 2);
+      
+      for(int strip = 0; strip < numStrips; strip++) {
+        int stripPos, stripWidth;
+        if(isHorizontal) {
+          stripPos = rand.nextInt(0, y_size - 1);
+          stripWidth = 1 + rand.nextInt(0, 1);
+          
+          for(int w = 0; w < stripWidth && stripPos + w < y_size; w++) {
+            for(int x = 0; x < x_size; x++) {
+              Loc loc = Location::getLoc(x, stripPos + w, x_size);
+              if(colors[loc] != C_WALL) {
+                weight_mask[loc] = stripWeight;
+              }
+            }
+          }
+        } else {
+          stripPos = rand.nextInt(0, x_size - 1);
+          stripWidth = 1 + rand.nextInt(0, 1);
+          
+          for(int w = 0; w < stripWidth && stripPos + w < x_size; w++) {
+            for(int y = 0; y < y_size; y++) {
+              Loc loc = Location::getLoc(stripPos + w, y, x_size);
+              if(colors[loc] != C_WALL) {
+                weight_mask[loc] = stripWeight;
+              }
+            }
+          }
+        }
+      }
+      break;
+    }
+    
+    case 5: { // Checkerboard pattern
+      float weight1 = 0.4f + (float)rand.nextDouble() * 0.4f;
+      float weight2 = 1.2f + (float)rand.nextDouble() * 0.6f;
+      int patternSize = 2 + rand.nextInt(0, 2); // 2x2, 3x3, or 4x4 squares
+      
+      for(int y = 0; y < y_size; y++) {
+        for(int x = 0; x < x_size; x++) {
+          bool isType1 = ((x / patternSize) + (y / patternSize)) % 2 == 0;
+          float weight = isType1 ? weight1 : weight2;
+          
+          Loc loc = Location::getLoc(x, y, x_size);
+          if(colors[loc] != C_WALL) {
+            weight_mask[loc] = weight;
+          }
+        }
+      }
+      break;
+    }
+    
+    default:
+      generateRandomWeightMask(rand);
+      break;
+  }
+}
+
 void Board::setUniformWeightMask() {
   for(int y = 0; y < y_size; y++) {
     for(int x = 0; x < x_size; x++) {
