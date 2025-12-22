@@ -244,6 +244,14 @@ struct TrainingWriteBuffers {
   //C4: Final board area/territory [-120,120]. All 0 if C34 has weight 0. Unlike ownership, takes into account group tax and scoring rules.
   NumpyBuffer<int8_t> valueTargetsNCHW;
 
+  //Pairwise connectivity targets
+  //Shape [N, Pos, Pos], where Pos = dataXLen*dataYLen.
+  //For on-board points only: value is 1 if the two points are connected by a chain of stones of the same color
+  //(i.e. belong to the same connected component of stones), and -1 otherwise.
+  //Pairs involving off-board points (padding) are 0.
+  //All 0 if C27 has weight 0.
+  NumpyBuffer<int8_t> connectionTargetsNPP;
+
   //Spatial q-value targets, from the perspective of the player to move.
   //C0: winloss * 32000
   //C1: score * 60

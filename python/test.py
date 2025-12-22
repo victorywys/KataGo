@@ -103,7 +103,7 @@ def main(args):
         assert (model_kind is None) != (config_file is None), "Must provide exactly one of -model-kind and -config if no checkpoint"
 
         if model_kind is not None:
-            model_config = modelconfigs.config_of_name[model_kind]
+            model_config = modelconfigs.resolve_model_config(model_kind)
         else:
             with open(config_file,"r") as f:
                 model_config = json.load(f)

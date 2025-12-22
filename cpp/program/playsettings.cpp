@@ -49,6 +49,10 @@ PlaySettings PlaySettings::loadForMatch(ConfigParser& cfg) {
   if(playSettings.dynamicSelfKomiWinLossMin > playSettings.dynamicSelfKomiWinLossMax)
     throw StringError("dynamicSelfKomiWinLossMin > dynamicSelfKomiWinLossMax");
 
+  // Probability of using a uniform (all-1) weight mask instead of randomized mask
+  // (If omitted in config, preserve legacy default for match mode.)
+  playSettings.weightMaskUniformProb = cfg.contains("weightMaskUniformProb") ? cfg.getDouble("weightMaskUniformProb",0.0,1.0) : 0.0;
+
   playSettings.recordTimePerMove = true;
   return playSettings;
 }
@@ -59,6 +63,10 @@ PlaySettings PlaySettings::loadForGatekeeper(ConfigParser& cfg) {
   playSettings.resignThreshold = cfg.getDouble("resignThreshold",-1.0,0.0); //Threshold on [-1,1], regardless of winLossUtilityFactor
   playSettings.resignConsecTurns = cfg.getInt("resignConsecTurns",1,100);
   playSettings.compensateKomiVisits = cfg.contains("compensateKomiVisits") ? cfg.getInt("compensateKomiVisits",1,10000) : 100;
+
+  // Probability of using a uniform (all-1) weight mask instead of randomized mask
+  // (If omitted in config, preserve legacy default for gatekeeper mode.)
+  playSettings.weightMaskUniformProb = cfg.contains("weightMaskUniformProb") ? cfg.getDouble("weightMaskUniformProb",0.0,1.0) : 0.0;
   return playSettings;
 }
 

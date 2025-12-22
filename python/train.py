@@ -441,7 +441,7 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
         if path_to_load_from is None:
             logging.info("Initializing new model!")
             assert model_kind is not None, "Model kind is none or unspecified but the model is being created fresh"
-            model_config = modelconfigs.config_of_name[model_kind]
+            model_config = modelconfigs.resolve_model_config(model_kind)
             logging.info(str(model_config))
             raw_model = Model(model_config,pos_len)
             raw_model.initialize()
@@ -476,7 +476,7 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
             return (model_config, ddp_model, raw_model, swa_model, optimizer, metrics_obj, running_metrics, train_state, last_val_metrics)
         else:
             state_dict = torch.load(path_to_load_from, map_location=device)
-            model_config = state_dict["config"] if "config" in state_dict else modelconfigs.config_of_name[model_kind]
+            model_config = state_dict["config"] if "config" in state_dict else modelconfigs.resolve_model_config(model_kind)
             logging.info(str(model_config))
             raw_model = Model(model_config,pos_len)
             raw_model.initialize()

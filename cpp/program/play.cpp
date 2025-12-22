@@ -495,7 +495,9 @@ void GameInitializer::createGameSharedUnsynchronized(
     pla = initialPosition->pla;
 
     // Generate weight mask for initial position games (random or uniform based on config)
-    if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
+    if(!playSettings.forSelfPlay)
+      board.setUniformWeightMask();
+    else if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
       board.setUniformWeightMask();
     else
       board.generateRandomWeightMask(rand);
@@ -557,7 +559,9 @@ void GameInitializer::createGameSharedUnsynchronized(
     hist.setInitialTurnNumber(startPos.initialTurnNumber);
 
     // Generate weight mask for SGF position games (random or uniform based on config)
-    if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
+    if(!playSettings.forSelfPlay)
+      board.setUniformWeightMask();
+    else if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
       board.setUniformWeightMask();
     else
       board.generateRandomWeightMask(rand);
@@ -608,7 +612,9 @@ void GameInitializer::createGameSharedUnsynchronized(
     hist.clear(board,pla,rules,0);
 
     // Generate weight mask for new games (random or uniform based on config)
-    if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
+    if(!playSettings.forSelfPlay)
+      board.setUniformWeightMask();
+    else if(playSettings.weightMaskUniformProb > 0.0 && rand.nextBool(playSettings.weightMaskUniformProb))
       board.setUniformWeightMask();
     else
       board.generateRandomWeightMask(rand);

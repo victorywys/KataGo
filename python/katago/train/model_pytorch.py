@@ -1407,6 +1407,21 @@ class ValueHead(torch.nn.Module):
         self.conv_futurepos = torch.nn.Conv2d(c_in, 2, kernel_size=1, padding="same", bias=False)
         self.conv_seki = torch.nn.Conv2d(c_in, 4, kernel_size=1, padding="same", bias=False)
 
+        # Optional: connection head producing (N,Pos,Pos) logits from per-point embeddings.
+        conn_cfg = config.get("connection_head", {}) if isinstance(config, dict) else {}
+        self.has_connection_head = bool(conn_cfg.get("enabled", False))
+        self.connection_embed_channels = int(conn_cfg.get("embedding_channels", 16))
+        if self.has_connection_head:
+            if self.connection_embed_channels <= 0:
+                raise ValueError("connection_head.embedding_channels must be > 0")
+            self.conv_connection_embed = torch.nn.Conv2d(
+                c_v1,
+                self.connection_embed_channels,
+                kernel_size=1,
+                padding="same",
+                bias=False,
+            )
+
         self.pos_len = pos_len
         self.scorebelief_mid = self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS
         self.scorebelief_len = self.scorebelief_mid * 2
@@ -1456,6 +1471,8 @@ class ValueHead(torch.nn.Module):
         init_weights(self.conv_scoring.weight, "identity", scale=aux_spatial_output_scale)
         init_weights(self.conv_futurepos.weight, "identity", scale=aux_spatial_output_scale)
         init_weights(self.conv_seki.weight, "identity", scale=aux_spatial_output_scale)
+        if self.has_connection_head:
+            init_weights(self.conv_connection_embed.weight, "identity", scale=aux_spatial_output_scale)
 
         init_weights(self.linear_s2.weight, self.activation, scale=1.0)
         init_weights(self.linear_s2.bias, self.activation, scale=1.0, fan_tensor=self.linear_s2.weight)
@@ -1482,6 +1499,8 @@ class ValueHead(torch.nn.Module):
         reg_dict["output"].append(self.conv_scoring.weight)
         reg_dict["output"].append(self.conv_futurepos.weight)
         reg_dict["output"].append(self.conv_seki.weight)
+        if self.has_connection_head:
+            reg_dict["output"].append(self.conv_connection_embed.weight)
         reg_dict["output"].append(self.linear_s2.weight)
         reg_dict["output_noreg"].append(self.linear_s2.bias)
         reg_dict["output"].append(self.linear_s2off.weight)
@@ -1518,6 +1537,15 @@ class ValueHead(torch.nn.Module):
         out_futurepos = self.conv_futurepos(x) * mask
         out_seki = self.conv_seki(x) * mask
 
+        out_connection_logits = None
+        if self.has_connection_head:
+            # Build per-point embeddings and compute pairwise logits via dot product.
+            emb = self.conv_connection_embed(outv1) * mask  # N, Cemb, H, W
+            batch_size = emb.shape[0]
+            pos = self.pos_len * self.pos_len
+            emb = emb.view(batch_size, self.connection_embed_channels, pos).transpose(1, 2)  # N, Pos, Cemb
+            out_connection_logits = torch.matmul(emb, emb.transpose(1, 2)) / math.sqrt(float(self.connection_embed_channels))
+
         # Score belief head
         batch_size = x.shape[0]
         outsv2 = (
@@ -1536,7 +1564,7 @@ class ValueHead(torch.nn.Module):
         # Take the mixture distribution weighted by outsmix_weights
         out_scorebelief_logprobs = torch.logsumexp(out_scorebelief_logprobs + outsmix_logweights.view(-1, 1, self.num_scorebeliefs), dim=2)
 
-        return (
+        base = (
             out_value,
             out_miscvalue,
             out_moremiscvalue,
@@ -1546,6 +1574,9 @@ class ValueHead(torch.nn.Module):
             out_seki,
             out_scorebelief_logprobs,
         )
+        if out_connection_logits is not None:
+            base = base + (out_connection_logits,)
+        return base
 
 class WeightedValueHead(torch.nn.Module):
     def __init__(self, c_in, c_hidden, activation):
@@ -1984,6 +2015,14 @@ class Model(torch.nn.Module):
             iout = self.norm_intermediate_trunkfinal(iout, mask=mask, mask_sum=mask_sum)
             iout = self.act_intermediate_trunkfinal(iout)
             iout_policy = self.intermediate_policy_head(iout, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, extra_outputs=extra_outputs)
+            intermediate_value_head_outputs = self.intermediate_value_head(
+                iout,
+                mask=mask,
+                mask_sum_hw=mask_sum_hw,
+                mask_sum=mask_sum,
+                input_global=input_global,
+                extra_outputs=extra_outputs,
+            )
             (
                 iout_value,
                 iout_miscvalue,
@@ -1993,7 +2032,9 @@ class Model(torch.nn.Module):
                 iout_futurepos,
                 iout_seki,
                 iout_scorebelief_logprobs,
-            ) = self.intermediate_value_head(iout, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, input_global=input_global, extra_outputs=extra_outputs)
+                *intermediate_value_head_extra,
+            ) = intermediate_value_head_outputs
+            iout_connection_logits = intermediate_value_head_extra[0] if len(intermediate_value_head_extra) > 0 else None
 
             for block in self.blocks[self.intermediate_head_blocks:]:
                 # print("TENSOR BEFORE BLOCK")
@@ -2027,6 +2068,14 @@ class Model(torch.nn.Module):
             out_aug = out
         # Combine with trunk output (augmented if weight mask present)
         out_policy = self.policy_head(out_aug, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, extra_outputs=extra_outputs)
+        value_head_outputs = self.value_head(
+            out_aug,
+            mask=mask,
+            mask_sum_hw=mask_sum_hw,
+            mask_sum=mask_sum,
+            input_global=input_global,
+            extra_outputs=extra_outputs,
+        )
         (
             out_value,
             out_miscvalue,
@@ -2036,37 +2085,46 @@ class Model(torch.nn.Module):
             out_futurepos,
             out_seki,
             out_scorebelief_logprobs,
-        ) = self.value_head(out_aug, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum, input_global=input_global, extra_outputs=extra_outputs)
+            *value_head_extra,
+        ) = value_head_outputs
+        out_connection_logits = value_head_extra[0] if len(value_head_extra) > 0 else None
         if self.weighted_value_head is not None:
             out_weighted_value = self.weighted_value_head(out_aug, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
         else:
             out_weighted_value = None
 
         if self.has_intermediate_head:
-            return (
-                (
-                    out_policy,
-                    out_value,
-                    out_miscvalue,
-                    out_moremiscvalue,
-                    out_ownership,
-                    out_scoring,
-                    out_futurepos,
-                    out_seki,
-                    out_scorebelief_logprobs,
-                ),
-                (
-                    iout_policy,
-                    iout_value,
-                    iout_miscvalue,
-                    iout_moremiscvalue,
-                    iout_ownership,
-                    iout_scoring,
-                    iout_futurepos,
-                    iout_seki,
-                    iout_scorebelief_logprobs,
-                ),
+            outputs_main = (
+                out_policy,
+                out_value,
+                out_miscvalue,
+                out_moremiscvalue,
+                out_ownership,
+                out_scoring,
+                out_futurepos,
+                out_seki,
+                out_scorebelief_logprobs,
             )
+            if out_connection_logits is not None:
+                outputs_main = outputs_main + (out_connection_logits,)
+            if out_weighted_value is not None:
+                outputs_main = outputs_main + (out_weighted_value,)
+
+            outputs_intermediate = (
+                iout_policy,
+                iout_value,
+                iout_miscvalue,
+                iout_moremiscvalue,
+                iout_ownership,
+                iout_scoring,
+                iout_futurepos,
+                iout_seki,
+                iout_scorebelief_logprobs,
+            )
+            if iout_connection_logits is not None:
+                outputs_intermediate = outputs_intermediate + (iout_connection_logits,)
+
+            return (outputs_main, outputs_intermediate)
         else:
             outputs_main = (
                 out_policy,
@@ -2079,6 +2137,8 @@ class Model(torch.nn.Module):
                 out_seki,
                 out_scorebelief_logprobs,
             )
+            if out_connection_logits is not None:
+                outputs_main = outputs_main + (out_connection_logits,)
             if out_weighted_value is not None:
                 outputs_main = outputs_main + (out_weighted_value,)
             return (outputs_main,)
@@ -2087,21 +2147,13 @@ class Model(torch.nn.Module):
         return tuple(self.float32ify_single_heads_output(outputs) for outputs in outputs_byheads)
 
     def float32ify_single_heads_output(self, outputs):
-        if self.weighted_value_head is not None and len(outputs) == 10:
-            (
-                out_policy,
-                out_value,
-                out_miscvalue,
-                out_moremiscvalue,
-                out_ownership,
-                out_scoring,
-                out_futurepos,
-                out_seki,
-                out_scorebelief_logprobs,
-                out_weighted_value,
-            ) = outputs
-        else:
-            (
+        return tuple(o.to(torch.float32) if isinstance(o, torch.Tensor) else o for o in outputs)
+
+    def postprocess_output(self, outputs_byheads):
+        return tuple(self.postprocess_single_heads_output(outputs) for outputs in outputs_byheads)
+
+    def postprocess_single_heads_output(self, outputs):
+        (
             out_policy,
             out_value,
             out_miscvalue,
@@ -2110,54 +2162,9 @@ class Model(torch.nn.Module):
             out_scoring,
             out_futurepos,
             out_seki,
-                out_scorebelief_logprobs,
-            ) = outputs
-            out_weighted_value = None
-        base = (
-            out_policy.to(torch.float32),
-            out_value.to(torch.float32),
-            out_miscvalue.to(torch.float32),
-            out_moremiscvalue.to(torch.float32),
-            out_ownership.to(torch.float32),
-            out_scoring.to(torch.float32),
-            out_futurepos.to(torch.float32),
-            out_seki.to(torch.float32),
-            out_scorebelief_logprobs.to(torch.float32),
-        )
-        if out_weighted_value is not None:
-            base = base + (out_weighted_value.to(torch.float32),)
-        return base
-
-    def postprocess_output(self, outputs_byheads):
-        return tuple(self.postprocess_single_heads_output(outputs) for outputs in outputs_byheads)
-
-    def postprocess_single_heads_output(self, outputs):
-        if self.weighted_value_head is not None and len(outputs) == 10:
-            (
-                out_policy,
-                out_value,
-                out_miscvalue,
-                out_moremiscvalue,
-                out_ownership,
-                out_scoring,
-                out_futurepos,
-                out_seki,
-                out_scorebelief_logprobs,
-                out_weighted_value,
-            ) = outputs
-        else:
-            (
-                out_policy,
-                out_value,
-                out_miscvalue,
-                out_moremiscvalue,
-                out_ownership,
-                out_scoring,
-                out_futurepos,
-                out_seki,
-                out_scorebelief_logprobs,
-            ) = outputs
-            out_weighted_value = None
+            out_scorebelief_logprobs,
+            *extra,
+        ) = outputs
 
         policy_logits = out_policy
         value_logits = out_value
@@ -2196,6 +2203,8 @@ class Model(torch.nn.Module):
             pred_shortterm_score_error, # N
             scorebelief_logits, # N, 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
         )
-        if out_weighted_value is not None:
-            base = base + (out_weighted_value.to(torch.float32),) # N,5
+        if len(extra) > 0:
+            base = base + tuple(extra)
         return base
+
+

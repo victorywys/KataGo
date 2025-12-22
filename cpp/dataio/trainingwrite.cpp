@@ -2,6 +2,7 @@
 
 #include "../core/fileutils.h"
 #include "../neuralnet/modelversion.h"
+#include <unordered_map>
 
 using namespace std;
 
@@ -293,6 +294,7 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
    scoreDistrN({maxRws, xLen*yLen*2+NNPos::EXTRA_SCORE_DISTR_RADIUS*2}),
    valueTargetsNCHW({maxRws, VALUE_SPATIAL_TARGET_NUM_CHANNELS, yLen, xLen}),
+   connectionTargetsNPP({maxRws, (int64_t)(xLen*yLen), (int64_t)(xLen*yLen)}),
    qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, NNPos::getPolicySize(xLen,yLen)}),
   metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS}),
   weightedValueTargetsNC({maxRws,5})
@@ -719,12 +721,15 @@ void TrainingWriteBuffers::addRow(
   int scoreDistrMid = posArea + NNPos::EXTRA_SCORE_DISTR_RADIUS;
   int8_t* rowScoreDistr = scoreDistrN.data + curRows * scoreDistrLen;
   int8_t* rowOwnership = valueTargetsNCHW.data + curRows * VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea;
+  int8_t* rowConn = connectionTargetsNPP.data + curRows * posArea * posArea;
 
   if(finalOwnership == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
     rowGlobal[27] = 0.0f;
     rowGlobal[20] = 0.0f;
     for(int i = 0; i<posArea*2; i++)
       rowOwnership[i] = 0;
+    for(int i = 0; i<posArea*posArea; i++)
+      rowConn[i] = 0;
     for(int i = 0; i<scoreDistrLen; i++)
       rowScoreDistr[i] = 0;
     //Dummy value, to make sure it still sums to 100
@@ -757,6 +762,111 @@ void TrainingWriteBuffers::addRow(
         //Mark full area points that ended up not being owned
         if(finalFullArea[loc] != C_EMPTY && finalOwnership[loc] == C_EMPTY)
           rowOwnership[pos+posArea] = (finalFullArea[loc] == nextPlayer ? 1 : -1);
+      }
+    }
+
+    //Fill connection targets based on connectivity of stones on the final board.
+    //For on-board points: 1 if both points are stones in the same connected component (4-neighbor) of the same color, else -1.
+    //Pairs involving off-board (padded) points are 0.
+    {
+      // Precompute in-board mask and union-find over finalBoard stones.
+      std::vector<bool> inBoard(posArea,false);
+      std::vector<int> parent(posArea,-1);
+      std::vector<int> rnk(posArea,0);
+      std::vector<Color> col(posArea,C_EMPTY);
+
+      auto findRoot = [&](int a) {
+        int p = a;
+        while(parent[p] != p) p = parent[p];
+        while(parent[a] != a) { int na = parent[a]; parent[a] = p; a = na; }
+        return p;
+      };
+      auto unite = [&](int a, int b) {
+        int ra = findRoot(a);
+        int rb = findRoot(b);
+        if(ra == rb) return;
+        if(rnk[ra] < rnk[rb]) std::swap(ra,rb);
+        parent[rb] = ra;
+        if(rnk[ra] == rnk[rb]) rnk[ra]++;
+      };
+
+      // Initialize active nodes for on-board points.
+      for(int y = 0; y<board.y_size; y++) {
+        for(int x = 0; x<board.x_size; x++) {
+          int pos = NNPos::xyToPos(x,y,dataXLen);
+          Loc locFinal = Location::getLoc(x,y,finalBoard->x_size);
+          Color c = finalBoard->colors[locFinal];
+          inBoard[pos] = true;
+          col[pos] = c;
+          if(c == P_BLACK || c == P_WHITE) {
+            parent[pos] = pos;
+            rnk[pos] = 0;
+          }
+        }
+      }
+
+      // Union same-color adjacent stones.
+      for(int y = 0; y<board.y_size; y++) {
+        for(int x = 0; x<board.x_size; x++) {
+          int pos = NNPos::xyToPos(x,y,dataXLen);
+          if(parent[pos] != pos) continue;
+          Color c = col[pos];
+          if(c != P_BLACK && c != P_WHITE) continue;
+          if(x > 0) {
+            int posL = NNPos::xyToPos(x-1,y,dataXLen);
+            if(parent[posL] == posL && col[posL] == c) unite(pos,posL);
+          }
+          if(y > 0) {
+            int posU = NNPos::xyToPos(x,y-1,dataXLen);
+            if(parent[posU] == posU && col[posU] == c) unite(pos,posU);
+          }
+        }
+      }
+
+      // Assign compact group ids.
+      std::vector<int> groupId(posArea,-1);
+      std::unordered_map<int,int> rootToId;
+      rootToId.reserve((size_t)posArea);
+      int nextId = 0;
+      for(int pos = 0; pos<posArea; pos++) {
+        if(!inBoard[pos]) continue;
+        if(parent[pos] != pos) continue;
+        Color c = col[pos];
+        if(c != P_BLACK && c != P_WHITE) continue;
+        int root = findRoot(pos);
+        (void)root;
+      }
+      for(int pos = 0; pos<posArea; pos++) {
+        if(!inBoard[pos]) continue;
+        Color c = col[pos];
+        if(c != P_BLACK && c != P_WHITE) {
+          groupId[pos] = -1;
+          continue;
+        }
+        int root = findRoot(pos);
+        auto it = rootToId.find(root);
+        if(it == rootToId.end()) {
+          int id = nextId++;
+          rootToId[root] = id;
+          groupId[pos] = id;
+        }
+        else {
+          groupId[pos] = it->second;
+        }
+      }
+
+      // Fill matrix.
+      for(int i = 0; i<posArea; i++) {
+        for(int j = 0; j<posArea; j++) {
+          if(!inBoard[i] || !inBoard[j]) {
+            rowConn[i*posArea + j] = 0;
+          }
+          else {
+            int gi = groupId[i];
+            int gj = groupId[j];
+            rowConn[i*posArea + j] = (gi != -1 && gi == gj) ? 1 : -1;
+          }
+        }
       }
     }
 
@@ -881,6 +991,9 @@ void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
 
   numBytes = valueTargetsNCHW.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("valueTargetsNCHW", valueTargetsNCHW.dataIncludingHeader, numBytes);
+
+  numBytes = connectionTargetsNPP.prepareHeaderWithNumRows(curRows);
+  zipFile.writeBuffer("connectionTargetsNPP", connectionTargetsNPP.dataIncludingHeader, numBytes);
 
   numBytes = qValueTargetsNCMove.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("qValueTargetsNCMove", qValueTargetsNCMove.dataIncludingHeader, numBytes);

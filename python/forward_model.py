@@ -109,6 +109,7 @@ def main(args):
             pred_shortterm_value_error, # N
             pred_shortterm_score_error, # N
             scorebelief_logits, # N, 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
+            *optional_extra,
         ) = results
 
         for batch_idx in range(batch["binaryInputNCHW"].shape[0]):

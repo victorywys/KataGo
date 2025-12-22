@@ -508,10 +508,12 @@ class Metrics:
             *optional_extra,
         ) = model_output_postprocessed
         weighted_value_head_output = None
-        if len(optional_extra) == 1:
-            extra0 = optional_extra[0]
-            if isinstance(extra0, torch.Tensor) and extra0.ndim == 2 and extra0.shape[-1] == 5:
-                weighted_value_head_output = extra0
+        connection_logits = None
+        for extra in optional_extra:
+            if isinstance(extra, torch.Tensor) and extra.ndim == 2 and extra.shape[-1] == 5:
+                weighted_value_head_output = extra
+            elif isinstance(extra, torch.Tensor) and extra.ndim == 3:
+                connection_logits = extra
 
         input_binary_nchw = batch["binaryInputNCHW"]
         input_global_nc = batch["globalInputNC"]
@@ -862,6 +864,23 @@ class Metrics:
             loss_weighted_score = torch.zeros_like(loss_policy_player)
             loss_weighted_lead = torch.zeros_like(loss_policy_player)
 
+        # Connection losses (optional)
+        if connection_logits is not None and "connectionTargetsNPP" in batch:
+            target_connection = batch["connectionTargetsNPP"]
+            # target_connection in {-1,+1,0} where 0 means ignore.
+            conn_mask = (target_connection != 0).to(dtype=connection_logits.dtype)
+            target_connection01 = 0.5 * (target_connection.to(dtype=connection_logits.dtype) + 1.0)
+            per_entry = torch.nn.functional.binary_cross_entropy_with_logits(
+                connection_logits,
+                target_connection01,
+                reduction="none",
+            )
+            per_sample = (per_entry * conn_mask).sum(dim=(1, 2)) / (conn_mask.sum(dim=(1, 2)) + 1e-6)
+            connection_loss_scale = float(raw_model.config.get("connection_head", {}).get("loss_scale", 1.0))
+            loss_connection = (per_sample * target_weight_ownership * global_weight).sum() * connection_loss_scale
+        else:
+            loss_connection = torch.zeros_like(loss_policy_player)
+
         loss_sum = (
             loss_policy_player * policy_opt_loss_scale
             + loss_policy_opponent
@@ -891,6 +910,7 @@ class Metrics:
             + loss_weighted_value
             + loss_weighted_score
             + loss_weighted_lead
+            + loss_connection
         )
 
         policy_acc1 = self.accuracy1(
@@ -932,6 +952,7 @@ class Metrics:
             "wvloss_sum": loss_weighted_value,
             "wscoreloss_sum": loss_weighted_score,
             "wleadloss_sum": loss_weighted_lead,
+            "connloss_sum": loss_connection,
             "loss_sum": loss_sum,
             "pacc1_sum": policy_acc1,
             "vsquare_sum": square_value,

@@ -1639,3 +1639,31 @@ for name, base_config in list(config_of_name.items()):
         "internal_num_channels": config["trunk_num_channels"],
     }
     config_of_name[name+"-meta"] = config
+
+
+DEFAULT_CONNECTION_HEAD_CONFIG: ModelConfig = {
+    "enabled": True,
+    "embedding_channels": 16,
+    "loss_scale": 1.0,
+}
+
+
+def resolve_model_config(model_kind: str) -> ModelConfig:
+    """Resolve a model config by name, with a few convenience suffixes.
+
+    Currently supported:
+    - '<base>-conn': enables the connection head without needing a separate named entry.
+    """
+    if model_kind in config_of_name:
+        return config_of_name[model_kind]
+
+    if model_kind.endswith("-conn"):
+        base_kind = model_kind[:-5]
+        if base_kind in config_of_name:
+            cfg = config_of_name[base_kind].copy()
+            # Only set if absent, so callers can still bake custom connection_head into base configs.
+            if "connection_head" not in cfg:
+                cfg["connection_head"] = DEFAULT_CONNECTION_HEAD_CONFIG.copy()
+            return cfg
+
+    raise KeyError(f"Unknown model_kind: {model_kind}")

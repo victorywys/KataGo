@@ -147,6 +147,7 @@ class GameState:
                 pred_shortterm_value_error, # N
                 pred_shortterm_score_error, # N
                 scorebelief_logits, # N, 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
+                *optional_extra,
             ) = (x[0] for x in outputs[0]) # N = 0
 
             policy0 = torch.nn.functional.softmax(policy_logits[0,:],dim=0).cpu().numpy()

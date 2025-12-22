@@ -9,6 +9,30 @@ import torch.nn.functional
 
 from ..train import modelconfigs
 
+# Cache for symmetry permutations used by pairwise targets.
+_SYMM_FLAT_PERM_CACHE = {}
+
+
+def _get_symmetry_flat_perm(pos_len: int, symm: int, device: torch.device) -> torch.Tensor:
+    """Return a LongTensor perm of shape [pos_len*pos_len] mapping new_flat_idx -> old_flat_idx."""
+    key = (pos_len, symm, device.type, device.index)
+    perm = _SYMM_FLAT_PERM_CACHE.get(key)
+    if perm is not None:
+        return perm
+    base = torch.arange(pos_len * pos_len, device=device, dtype=torch.int64).view(pos_len, pos_len)
+    perm = apply_symmetry(base, symm).reshape(-1).contiguous()
+    _SYMM_FLAT_PERM_CACHE[key] = perm
+    return perm
+
+
+def apply_symmetry_connection_targets(tensor: torch.Tensor, symm: int, pos_len: int) -> torch.Tensor:
+    """Apply symmetry to connectionTargetsNPP (N, Pos, Pos) by permuting both axes."""
+    assert tensor.ndim == 3
+    assert tensor.shape[1] == pos_len * pos_len
+    assert tensor.shape[2] == pos_len * pos_len
+    perm = _get_symmetry_flat_perm(pos_len, symm, tensor.device)
+    return tensor[:, perm, :][:, :, perm]
+
 def read_npz_training_data(
     npz_files,
     batch_size: int,
@@ -27,6 +51,7 @@ def read_npz_training_data(
 
     include_qvalues = model_config["version"] >= 16
     include_weighted_values = model_config["version"] >= 18
+    include_connection_targets = bool(model_config.get("connection_head", {}).get("enabled", False))
 
     def load_npz_file(npz_file):
         with np.load(npz_file) as npz:
@@ -48,6 +73,11 @@ def read_npz_training_data(
                 weightedValueTargetsNC = npz["weightedValueTargetsNC"].astype(np.float32)
             else:
                 weightedValueTargetsNC = None
+
+            if include_connection_targets and "connectionTargetsNPP" in npz:
+                connectionTargetsNPP = npz["connectionTargetsNPP"].astype(np.float32)
+            else:
+                connectionTargetsNPP = None
         del npz
 
         binaryInputNCHW = np.unpackbits(binaryInputNCHWPacked,axis=2)
@@ -77,7 +107,19 @@ def read_npz_training_data(
                 raise AssertionError(f"Binary feature channel mismatch: data has {binaryInputNCHW.shape[1]}, model expects {num_bin_features}")
         assert binaryInputNCHW.shape[1] == num_bin_features
         assert globalInputNC.shape[1] == num_global_features
-        return (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove, weightedValueTargetsNC)
+        return (
+            npz_file,
+            binaryInputNCHW,
+            globalInputNC,
+            policyTargetsNCMove,
+            globalTargetsNC,
+            scoreDistrN,
+            valueTargetsNCHW,
+            metadataInputNC,
+            qValueTargetsNCMove,
+            weightedValueTargetsNC,
+            connectionTargetsNPP,
+        )
 
     if not npz_files:
         return
@@ -86,7 +128,19 @@ def read_npz_training_data(
         future = executor.submit(load_npz_file, npz_files[0])
 
         for next_file in (npz_files[1:] + [None]):
-            (npz_file, binaryInputNCHW, globalInputNC, policyTargetsNCMove, globalTargetsNC, scoreDistrN, valueTargetsNCHW, metadataInputNC, qValueTargetsNCMove, weightedValueTargetsNC) = future.result()
+            (
+                npz_file,
+                binaryInputNCHW,
+                globalInputNC,
+                policyTargetsNCMove,
+                globalTargetsNC,
+                scoreDistrN,
+                valueTargetsNCHW,
+                metadataInputNC,
+                qValueTargetsNCMove,
+                weightedValueTargetsNC,
+                connectionTargetsNPP,
+            ) = future.result()
 
             num_samples = binaryInputNCHW.shape[0]
             # Just discard stuff that doesn't divide evenly
@@ -114,6 +168,8 @@ def read_npz_training_data(
                     batch_qValueTargetsNCMove = torch.from_numpy(qValueTargetsNCMove[start:end]).to(device)
                 if include_weighted_values and weightedValueTargetsNC is not None:
                     batch_weightedValueTargetsNC = torch.from_numpy(weightedValueTargetsNC[start:end]).to(device)
+                if include_connection_targets and connectionTargetsNPP is not None:
+                    batch_connectionTargetsNPP = torch.from_numpy(connectionTargetsNPP[start:end]).to(device)
 
                 (batch_binaryInputNCHW, batch_globalInputNC) = apply_history_matrices(
                     model_config, batch_binaryInputNCHW, batch_globalInputNC, batch_globalTargetsNC, h_base, h_builder
@@ -129,6 +185,8 @@ def read_npz_training_data(
                     if include_weighted_values and weightedValueTargetsNC is not None:
                         # Weighted targets are [N,5] no symmetry needed
                         pass
+                    if include_connection_targets and connectionTargetsNPP is not None:
+                        batch_connectionTargetsNPP = apply_symmetry_connection_targets(batch_connectionTargetsNPP, symm, pos_len)
 
                 batch_binaryInputNCHW = batch_binaryInputNCHW.contiguous()
                 batch_policyTargetsNCMove = batch_policyTargetsNCMove.contiguous()
@@ -137,6 +195,8 @@ def read_npz_training_data(
                     batch_qValueTargetsNCMove = batch_qValueTargetsNCMove.contiguous()
                 if include_weighted_values and weightedValueTargetsNC is not None:
                     batch_weightedValueTargetsNC = batch_weightedValueTargetsNC.contiguous()
+                if include_connection_targets and connectionTargetsNPP is not None:
+                    batch_connectionTargetsNPP = batch_connectionTargetsNPP.contiguous()
 
                 batch = dict(
                     binaryInputNCHW = batch_binaryInputNCHW,
@@ -152,6 +212,8 @@ def read_npz_training_data(
                     batch["qValueTargetsNCMove"] = batch_qValueTargetsNCMove
                 if include_weighted_values and weightedValueTargetsNC is not None:
                     batch["weightedValueTargetsNC"] = batch_weightedValueTargetsNC
+                if include_connection_targets and connectionTargetsNPP is not None:
+                    batch["connectionTargetsNPP"] = batch_connectionTargetsNPP
 
                 yield batch
 
