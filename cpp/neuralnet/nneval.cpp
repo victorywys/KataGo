@@ -10,6 +10,7 @@ NNResultBuf::NNResultBuf()
     resultMutex(),
     hasResult(false),
     includeOwnerMap(false),
+    includeConnectionMap(false),
     boardXSizeForServer(0),
     boardYSizeForServer(0),
     rowSpatialBuf(),
@@ -519,6 +520,31 @@ void NNEvaluator::serve(
           resultBuf->result->whiteOwnerMap = NULL;
         }
 
+        if(resultBuf->includeConnectionMap) {
+          int posLen = nnXLen * nnYLen;
+          float* whiteConnectionMap = new float[posLen * posLen];
+          for(int i = 0; i<posLen*posLen; i++)
+            whiteConnectionMap[i] = 0.0;
+          // Generate random symmetric connection probabilities
+          for(int y1 = 0; y1<boardYSize; y1++) {
+            for(int x1 = 0; x1<boardXSize; x1++) {
+              int pos1 = NNPos::xyToPos(x1,y1,nnXLen);
+              for(int y2 = y1; y2<boardYSize; y2++) {
+                for(int x2 = (y2==y1 ? x1 : 0); x2<boardXSize; x2++) {
+                  int pos2 = NNPos::xyToPos(x2,y2,nnXLen);
+                  float val = (float)rand.nextGaussian() * 0.10f;
+                  whiteConnectionMap[pos1 * posLen + pos2] = val;
+                  whiteConnectionMap[pos2 * posLen + pos1] = val;
+                }
+              }
+            }
+          }
+          resultBuf->result->whiteConnectionMap = whiteConnectionMap;
+        }
+        else {
+          resultBuf->result->whiteConnectionMap = NULL;
+        }
+
         //These aren't really probabilities. Win/Loss/NoResult will get softmaxed later
         double whiteWinProb = 0.0 + rand.nextGaussian() * 0.20;
         double whiteLossProb = 0.0 + rand.nextGaussian() * 0.20;
@@ -552,6 +578,12 @@ void NNEvaluator::serve(
           emptyOutput->whiteOwnerMap = new float[nnXLen*nnYLen];
         else
           emptyOutput->whiteOwnerMap = NULL;
+        if(resultBufs[row]->includeConnectionMap) {
+          int posLen = nnXLen * nnYLen;
+          emptyOutput->whiteConnectionMap = new float[posLen*posLen];
+        }
+        else
+          emptyOutput->whiteConnectionMap = NULL;
         outputBuf.push_back(emptyOutput);
       }
 
@@ -676,6 +708,7 @@ std::shared_ptr<NNOutput>* NNEvaluator::averageMultipleSymmetries(
   const MiscNNInputParams& baseNNInputParams,
   NNResultBuf& buf,
   bool includeOwnerMap,
+  bool includeConnectionMap,
   Rand& rand,
   int numSymmetriesToSample
 ) {
@@ -690,7 +723,7 @@ std::shared_ptr<NNOutput>* NNEvaluator::averageMultipleSymmetries(
     evaluate(
       board, history, nextPlayer, sgfMeta,
       nnInputParams,
-      buf, skipCacheThisIteration, includeOwnerMap
+      buf, skipCacheThisIteration, includeOwnerMap, includeConnectionMap
     );
     ptrs.push_back(std::move(buf.result));
   }
@@ -704,7 +737,8 @@ void NNEvaluator::evaluate(
   const MiscNNInputParams& nnInputParams,
   NNResultBuf& buf,
   bool skipCache,
-  bool includeOwnerMap
+  bool includeOwnerMap,
+  bool includeConnectionMap
 ) {
   evaluate(
     board,
@@ -714,7 +748,8 @@ void NNEvaluator::evaluate(
     nnInputParams,
     buf,
     skipCache,
-    includeOwnerMap
+    includeOwnerMap,
+    includeConnectionMap
   );
 }
 
@@ -726,7 +761,8 @@ void NNEvaluator::evaluate(
   const MiscNNInputParams& nnInputParamsArg,
   NNResultBuf& buf,
   bool skipCache,
-  bool includeOwnerMap
+  bool includeOwnerMap,
+  bool includeConnectionMap
 ) {
   assert(!isKilled);
   buf.hasResult = false;
@@ -759,7 +795,8 @@ void NNEvaluator::evaluate(
   bool hadResultWithoutOwnerMap = false;
   shared_ptr<NNOutput> resultWithoutOwnerMap;
   if(nnCacheTable != NULL && !skipCache && nnCacheTable->get(nnHash,buf.result)) {
-    if(!(includeOwnerMap && buf.result->whiteOwnerMap == NULL))
+    if(!(includeOwnerMap && buf.result->whiteOwnerMap == NULL) &&
+       !(includeConnectionMap && buf.result->whiteConnectionMap == NULL))
     {
       buf.hasResult = true;
       return;
@@ -771,6 +808,7 @@ void NNEvaluator::evaluate(
     }
   }
   buf.includeOwnerMap = includeOwnerMap;
+  buf.includeConnectionMap = includeConnectionMap;
 
   buf.boardXSizeForServer = board.x_size;
   buf.boardYSizeForServer = board.y_size;

@@ -33,8 +33,9 @@ function exportStuff() {
     FROMDIR="$1"
     TODIR="$2"
 
-    #Sort by timestamp so that we process in order of oldest to newest if there are multiple
-    for FILEPATH in $(find "$BASEDIR"/"$FROMDIR"/ -mindepth 1 -maxdepth 1 -printf "%T@ %p\n" | sort -n | cut -d ' ' -f 2)
+    # Use lexicographic sort on filenames instead of timestamp for blob storage compatibility
+    # Model directories are named like: prefix-s123456-d789012, so lexicographic ordering works
+    for FILEPATH in $(find "$BASEDIR"/"$FROMDIR"/ -mindepth 1 -maxdepth 1 -printf "%p\n" | sort)
     do
         #Make sure to skip tmp directories that are transiently there by the training,
         #they are probably in the process of being written

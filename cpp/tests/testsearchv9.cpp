@@ -456,7 +456,7 @@ o.....oo
       nnInputParams.symmetry = 0;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 0" << endl;
       buf.result->debugPrint(cout, board);
     }
@@ -465,7 +465,7 @@ o.....oo
       nnInputParams.symmetry = 1;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 1" << endl;
       buf.result->debugPrint(cout, board);
     }
@@ -474,7 +474,7 @@ o.....oo
       nnInputParams.symmetry = 2;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 2" << endl;
       buf.result->debugPrint(cout, board);
     }
@@ -483,7 +483,7 @@ o.....oo
       nnInputParams.symmetry = 4;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 4" << endl;
       buf.result->debugPrint(cout, board);
     }
@@ -515,7 +515,7 @@ oo...ooo
       nnInputParams.symmetry = 0;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 0" << endl;
       buf.result->debugPrint(cout, board);
     }
@@ -524,7 +524,7 @@ oo...ooo
       nnInputParams.symmetry = 1;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 1" << endl;
       buf.result->debugPrint(cout, board);
     }
@@ -533,7 +533,7 @@ oo...ooo
       nnInputParams.symmetry = 2;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 2" << endl;
       buf.result->debugPrint(cout, board);
     }
@@ -542,7 +542,7 @@ oo...ooo
       nnInputParams.symmetry = 4;
       NNResultBuf buf;
       bool skipCache = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       cout << "Symmetry 4" << endl;
       buf.result->debugPrint(cout, board);
     }

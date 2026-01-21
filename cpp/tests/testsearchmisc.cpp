@@ -42,7 +42,7 @@ void Tests::runNNOnTinyBoard(const string& modelFile, bool inputsNHWC, bool useN
   NNResultBuf buf;
   bool skipCache = true;
   bool includeOwnerMap = true;
-  nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+  nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
   printPolicyValueOwnership(board,buf);
   cout << endl << endl;
@@ -91,7 +91,7 @@ void Tests::runNNSymmetries(const string& modelFile, bool inputsNHWC, bool useNH
     NNResultBuf buf;
     bool skipCache = true;
     bool includeOwnerMap = true;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     printPolicyValueOwnership(board,buf);
     cout << endl << endl;
@@ -133,7 +133,7 @@ void Tests::runNNOnManyPoses(const string& modelFile, bool inputsNHWC, bool useN
     BoardHistory hist;
     Rules initialRules = sgf->getRulesOrFailAllowUnspecified(Rules());
     sgf->setupBoardAndHistAssumeLegal(initialRules, board, nextPla, hist, turnIdx);
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     winProbs.push_back(buf.result->whiteWinProb);
     scoreMeans.push_back(buf.result->whiteScoreMean);
@@ -256,7 +256,7 @@ void Tests::runNNBatchingTest(const string& modelFile, bool inputsNHWC, bool use
       bool skipCache = true;
       bool includeOwnerMap = true;
       Board board = item.board;
-      nnEval->evaluate(board,item.hist,item.nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,item.hist,item.nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
       NNOutput& nnOutput = *(buf.result);
       // nnOutput.debugPrint(cout,board);

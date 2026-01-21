@@ -127,6 +127,10 @@ void AsyncBot::setAlwaysIncludeOwnerMap(bool b) {
   stopAndWait();
   search->setAlwaysIncludeOwnerMap(b);
 }
+void AsyncBot::setAlwaysIncludeConnectionMap(bool b) {
+  stopAndWait();
+  search->setAlwaysIncludeConnectionMap(b);
+}
 void AsyncBot::setParams(SearchParams params) {
   stopAndWait();
   search->setParams(params);

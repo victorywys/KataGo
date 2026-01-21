@@ -2321,6 +2321,7 @@ struct ValueHead {
   int valueChannels;
   int scoreValueChannels;
   int ownershipChannels;
+  int connectionEmbeddingChannels;
 
   std::unique_ptr<ConvLayer> v1Conv;
   std::unique_ptr<BatchNormLayer> v1BN;
@@ -2331,6 +2332,7 @@ struct ValueHead {
   std::unique_ptr<MatMulLayer> sv3Mul;
   std::unique_ptr<MatBiasLayer> sv3Bias;
   std::unique_ptr<ConvLayer> vOwnershipConv;
+  std::unique_ptr<ConvLayer> vConnectionEmbeddingConv;
 
   ValueHead() = delete;
   ValueHead(const ValueHead&) = delete;
@@ -2352,6 +2354,7 @@ struct ValueHead {
     valueChannels = desc->v3Mul.outChannels;
     scoreValueChannels = desc->sv3Mul.outChannels;
     ownershipChannels = desc->vOwnershipConv.outChannels;
+    connectionEmbeddingChannels = desc->vConnectionEmbeddingConv.outChannels;
 
     v1Conv = std::make_unique<ConvLayer>(handle,&desc->v1Conv,nnXLen,nnYLen,useFP16);
     v1BN = std::make_unique<BatchNormLayer>(handle,&desc->v1BN,&desc->v1Activation,nnXLen,nnYLen,useFP16);
@@ -2362,6 +2365,9 @@ struct ValueHead {
     sv3Mul = std::make_unique<MatMulLayer>(handle,&desc->sv3Mul);
     sv3Bias = std::make_unique<MatBiasLayer>(handle,&desc->sv3Bias,ACTIVATION_IDENTITY);
     vOwnershipConv = std::make_unique<ConvLayer>(handle,&desc->vOwnershipConv,nnXLen,nnYLen,useFP16);
+    if(connectionEmbeddingChannels > 0) {
+      vConnectionEmbeddingConv = std::make_unique<ConvLayer>(handle,&desc->vConnectionEmbeddingConv,nnXLen,nnYLen,useFP16);
+    }
   }
 
   ~ValueHead() {
@@ -2371,6 +2377,9 @@ struct ValueHead {
     ConvWorkspaceEltsNeeded maxElts;
     maxElts = ConvWorkspaceEltsNeeded::getMax(maxElts,v1Conv->requiredConvWorkspaceElts(handle,maxBatchSize));
     maxElts = ConvWorkspaceEltsNeeded::getMax(maxElts,vOwnershipConv->requiredConvWorkspaceElts(handle,maxBatchSize));
+    if(vConnectionEmbeddingConv) {
+      maxElts = ConvWorkspaceEltsNeeded::getMax(maxElts,vConnectionEmbeddingConv->requiredConvWorkspaceElts(handle,maxBatchSize));
+    }
     return maxElts;
   }
 
@@ -2384,6 +2393,7 @@ struct ValueHead {
     cl_mem value,
     cl_mem scoreValue,
     cl_mem ownership,
+    cl_mem connectionEmbedding,
     cl_mem convWorkspace,
     cl_mem convWorkspace2
   ) const {
@@ -2412,6 +2422,10 @@ struct ValueHead {
     #endif
 
     vOwnershipConv->apply(handle,batchSize,v1Out.buf,ownership,convWorkspace,convWorkspace2);
+    
+    if(vConnectionEmbeddingConv) {
+      vConnectionEmbeddingConv->apply(handle,batchSize,v1Out.buf,connectionEmbedding,convWorkspace,convWorkspace2);
+    }
   }
 
 };
@@ -2460,6 +2474,7 @@ struct Model {
   int numValueChannels;
   int numScoreValueChannels;
   int numOwnershipChannels;
+  int numConnectionEmbeddingChannels;
 
   std::unique_ptr<Trunk> trunk;
   std::unique_ptr<PolicyHead> policyHead;
@@ -2498,6 +2513,7 @@ struct Model {
     numValueChannels = desc->numValueChannels;
     numScoreValueChannels = desc->numScoreValueChannels;
     numOwnershipChannels = desc->numOwnershipChannels;
+    numConnectionEmbeddingChannels = desc->numConnectionEmbeddingChannels;
 
     int numFeatures = NNModelVersion::getNumSpatialFeatures(modelVersion);
     if(numInputChannels != numFeatures)
@@ -2561,6 +2577,7 @@ struct Model {
     cl_mem value,
     cl_mem scoreValue,
     cl_mem ownership,
+    cl_mem connectionEmbedding,
 
     cl_mem convWorkspace,
     cl_mem convWorkspace2
@@ -2625,6 +2642,7 @@ struct Model {
       value,
       scoreValue,
       ownership,
+      connectionEmbedding,
       convWorkspace,
       convWorkspace2
     );
@@ -2658,6 +2676,8 @@ struct Buffers {
   size_t scoreValueElts;
   cl_mem ownership;
   size_t ownershipElts;
+  cl_mem connectionEmbedding;
+  size_t connectionEmbeddingElts;
 
   cl_mem convWorkspace;
   cl_mem convWorkspace2;
@@ -2711,6 +2731,15 @@ struct Buffers {
     ownershipElts = m.valueHead->ownershipChannels * batchXYElts;
     ownership = createReadWriteBuffer(handle, ownershipElts, useFP16);
 
+    if(m.valueHead->connectionEmbeddingChannels > 0) {
+      connectionEmbeddingElts = m.valueHead->connectionEmbeddingChannels * batchXYElts;
+      connectionEmbedding = createReadWriteBuffer(handle, connectionEmbeddingElts, useFP16);
+    }
+    else {
+      connectionEmbeddingElts = 0;
+      connectionEmbedding = NULL;
+    }
+
     ConvWorkspaceEltsNeeded convWorkspaceElts = m.requiredConvWorkspaceElts(handle);
     convWorkspace = createReadWriteBuffer(handle, convWorkspaceElts.size1, useFP16);
     convWorkspace2 = createReadWriteBuffer(handle, convWorkspaceElts.size2, useFP16);
@@ -2733,6 +2762,8 @@ struct Buffers {
     clReleaseMemObject(value);
     clReleaseMemObject(scoreValue);
     clReleaseMemObject(ownership);
+    if(connectionEmbedding != NULL)
+      clReleaseMemObject(connectionEmbedding);
 
     clReleaseMemObject(convWorkspace);
     clReleaseMemObject(convWorkspace2);
@@ -2854,6 +2885,7 @@ struct InputBuffers {
   size_t singleValueResultElts;
   size_t singleScoreValueResultElts;
   size_t singleOwnershipResultElts;
+  size_t singleConnectionEmbeddingResultElts;
 
   size_t userInputBufferElts;
   size_t userInputGlobalBufferElts;
@@ -2863,6 +2895,7 @@ struct InputBuffers {
   size_t valueResultBufferElts;
   size_t scoreValueResultBufferElts;
   size_t ownershipResultBufferElts;
+  size_t connectionEmbeddingResultBufferElts;
 
   float* userInputBuffer; //Host pointer
   half_t* userInputBufferHalf; //Host pointer
@@ -2876,6 +2909,8 @@ struct InputBuffers {
   float* scoreValueResults; //Host pointer
   float* ownershipResults; //Host pointer
   half_t* ownershipResultsHalf; //Host pointer
+  float* connectionEmbeddingResults; //Host pointer
+  half_t* connectionEmbeddingResultsHalf; //Host pointer
 
   InputBuffers(const LoadedModel* loadedModel, int maxBatchSz, int nnXLen, int nnYLen) {
     const ModelDesc& m = loadedModel->modelDesc;
@@ -2889,6 +2924,7 @@ struct InputBuffers {
     singleValueResultElts = (size_t)m.numValueChannels;
     singleScoreValueResultElts = (size_t)m.numScoreValueChannels;
     singleOwnershipResultElts = (size_t)m.numOwnershipChannels * nnXLen * nnYLen;
+    singleConnectionEmbeddingResultElts = (size_t)m.numConnectionEmbeddingChannels * nnXLen * nnYLen;
 
     assert(NNModelVersion::getNumSpatialFeatures(m.modelVersion) == m.numInputChannels);
     assert(NNModelVersion::getNumGlobalFeatures(m.modelVersion) == m.numInputGlobalChannels);
@@ -2921,6 +2957,14 @@ struct InputBuffers {
     scoreValueResults = new float[(size_t)maxBatchSize * m.numScoreValueChannels];
     ownershipResults = new float[(size_t)maxBatchSize * nnXLen * nnYLen * m.numOwnershipChannels];
     ownershipResultsHalf = new half_t[(size_t)maxBatchSize * nnXLen * nnYLen * m.numOwnershipChannels];
+    if(m.numConnectionEmbeddingChannels > 0) {
+      connectionEmbeddingResults = new float[(size_t)maxBatchSize * nnXLen * nnYLen * m.numConnectionEmbeddingChannels];
+      connectionEmbeddingResultsHalf = new half_t[(size_t)maxBatchSize * nnXLen * nnYLen * m.numConnectionEmbeddingChannels];
+    }
+    else {
+      connectionEmbeddingResults = NULL;
+      connectionEmbeddingResultsHalf = NULL;
+    }
   }
 
   ~InputBuffers() {
@@ -2936,6 +2980,10 @@ struct InputBuffers {
     delete[] scoreValueResults;
     delete[] ownershipResults;
     delete[] ownershipResultsHalf;
+    if(connectionEmbeddingResults != NULL)
+      delete[] connectionEmbeddingResults;
+    if(connectionEmbeddingResultsHalf != NULL)
+      delete[] connectionEmbeddingResultsHalf;
   }
 
   InputBuffers() = delete;
@@ -3096,6 +3144,7 @@ void NeuralNet::getOutput(
     buffers->value,
     buffers->scoreValue,
     buffers->ownership,
+    buffers->connectionEmbedding,
 
     buffers->convWorkspace,
     buffers->convWorkspace2
@@ -3150,6 +3199,27 @@ void NeuralNet::getOutput(
       inputBuffers->singleOwnershipResultElts*sizeof(float)*batchSize, inputBuffers->ownershipResults, 0, NULL, NULL
     );
     CHECK_ERR(err);
+  }
+
+  // Read connection embeddings if present
+  if(buffers->connectionEmbedding != NULL && inputBuffers->connectionEmbeddingResults != NULL) {
+    if(useFP16Storage) {
+      err = clEnqueueReadBuffer(
+        handle->commandQueue, buffers->connectionEmbedding, blocking, 0,
+        inputBuffers->singleConnectionEmbeddingResultElts*sizeof(half_t)*batchSize, inputBuffers->connectionEmbeddingResultsHalf, 0, NULL, NULL
+      );
+      CHECK_ERR(err);
+      size_t numElts = inputBuffers->singleConnectionEmbeddingResultElts * batchSize;
+      for(size_t i = 0; i<numElts; i++)
+        inputBuffers->connectionEmbeddingResults[i] = inputBuffers->connectionEmbeddingResultsHalf[i];
+    }
+    else {
+      err = clEnqueueReadBuffer(
+        handle->commandQueue, buffers->connectionEmbedding, blocking, 0,
+        inputBuffers->singleConnectionEmbeddingResultElts*sizeof(float)*batchSize, inputBuffers->connectionEmbeddingResults, 0, NULL, NULL
+      );
+      CHECK_ERR(err);
+    }
   }
 
   #ifdef PROFILE_KERNELS
@@ -3226,6 +3296,26 @@ void NeuralNet::getOutput(
       const float* ownershipSrcBuf = inputBuffers->ownershipResults + row * nnXLen * nnYLen;
       assert(gpuHandle->model->numOwnershipChannels == 1);
       SymmetryHelpers::copyOutputsWithSymmetry(ownershipSrcBuf, output->whiteOwnerMap, 1, nnYLen, nnXLen, inputBufs[row]->symmetry);
+    }
+
+    // Compute connection map if requested and embeddings are available
+    if(output->whiteConnectionMap != NULL && inputBuffers->connectionEmbeddingResults != NULL) {
+      int numConnectionEmbeddingChannels = gpuHandle->model->numConnectionEmbeddingChannels;
+      assert(numConnectionEmbeddingChannels > 0);
+      const float* embeddingSrcBuf = inputBuffers->connectionEmbeddingResults + row * nnXLen * nnYLen * numConnectionEmbeddingChannels;
+      
+      int pos = nnXLen * nnYLen;
+      // Compute pairwise dot products: output[i,j] = sum_k(emb[i,k] * emb[j,k]) / sqrt(numChannels)
+      float scale = 1.0f / sqrtf((float)numConnectionEmbeddingChannels);
+      for(int i = 0; i < pos; i++) {
+        for(int j = 0; j < pos; j++) {
+          float dotProduct = 0.0f;
+          for(int k = 0; k < numConnectionEmbeddingChannels; k++) {
+            dotProduct += embeddingSrcBuf[k * pos + i] * embeddingSrcBuf[k * pos + j];
+          }
+          output->whiteConnectionMap[i * pos + j] = dotProduct * scale;
+        }
+      }
     }
 
     if(modelVersion >= 9) {

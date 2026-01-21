@@ -124,7 +124,7 @@ NNEvaluator* TinyModelTest::runTinyModelTest(const string& baseDir, Logger& logg
       NNResultBuf buf;
       bool skipCache = true;
       bool includeOwnerMap = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
       //ostringstream out;
       //buf.result->debugPrint(out,board);
@@ -284,7 +284,7 @@ NNEvaluator* TinyModelTest::runTinyModelTest(const string& baseDir, Logger& logg
       NNResultBuf buf;
       bool skipCache = true;
       bool includeOwnerMap = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
       // ostringstream out;
       // buf.result->debugPrint(out,board);
@@ -431,7 +431,7 @@ NNEvaluator* TinyModelTest::runTinyModelTest(const string& baseDir, Logger& logg
       NNResultBuf buf;
       bool skipCache = true;
       bool includeOwnerMap = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
       // ostringstream out;
       // buf.result->debugPrint(out,board);

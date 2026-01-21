@@ -1426,8 +1426,31 @@ ValueHeadDesc::ValueHeadDesc(istream& in, int vrsn, bool binaryFloats) {
   sv3Bias = MatBiasLayerDesc(in,binaryFloats);
   vOwnershipConv = ConvLayerDesc(in,binaryFloats);
 
-  if(in.fail())
-    throw StringError(name + ": value head istream fail after parsing layers");
+  // After reading ownership conv, the stream should still be good
+  if(in.fail() && !in.eof())
+    throw StringError(name + ": value head istream fail after parsing ownership conv");
+
+  // Optionally read connection embedding layer if present
+  // Check if there's more data to read (connection embedding layer)
+  vConnectionEmbeddingConv = ConvLayerDesc();  // Default to empty
+  
+  if(!in.eof()) {
+    std::streampos pos = in.tellg();
+    std::string nextLayerName;
+    
+    if(std::getline(in, nextLayerName) && !nextLayerName.empty()) {
+      // Check if it's a connection layer name
+      if(nextLayerName.find("connection_embed") != std::string::npos) {
+        // Reset and read the connection layer
+        in.clear();
+        in.seekg(pos);
+        vConnectionEmbeddingConv = ConvLayerDesc(in,binaryFloats);
+      }
+    }
+  }
+  
+  // Clear EOF flag if we reached end naturally
+  in.clear();
 
   if(v1Conv.outChannels != v1BN.numChannels)
     throw StringError(
@@ -1490,6 +1513,19 @@ ValueHeadDesc::ValueHeadDesc(istream& in, int vrsn, bool binaryFloats) {
                v1Conv.outChannels));
   if(vOwnershipConv.outChannels != 1)
     throw StringError(name + Global::strprintf(": vOwnershipConv.outChannels (%d) != 1", vOwnershipConv.outChannels));
+
+  // Validate connection embedding layer if present
+  if(vConnectionEmbeddingConv.inChannels > 0) {
+    if(vConnectionEmbeddingConv.inChannels != v1Conv.outChannels)
+      throw StringError(
+        name + Global::strprintf(
+                 ": vConnectionEmbeddingConv.inChannels (%d) != v1Conv.outChannels (%d)",
+                 vConnectionEmbeddingConv.inChannels,
+                 v1Conv.outChannels));
+    // Embedding channels can be any positive value
+    if(vConnectionEmbeddingConv.outChannels <= 0)
+      throw StringError(name + Global::strprintf(": vConnectionEmbeddingConv.outChannels (%d) must be > 0", vConnectionEmbeddingConv.outChannels));
+  }
 }
 
 ValueHeadDesc::~ValueHeadDesc() {}
@@ -1512,12 +1548,16 @@ ValueHeadDesc& ValueHeadDesc::operator=(ValueHeadDesc&& other) {
   sv3Mul = std::move(other.sv3Mul);
   sv3Bias = std::move(other.sv3Bias);
   vOwnershipConv = std::move(other.vOwnershipConv);
+  vConnectionEmbeddingConv = std::move(other.vConnectionEmbeddingConv);
   return *this;
 }
 
 void ValueHeadDesc::iterConvLayers(std::function<void(const ConvLayerDesc& desc)> f) const {
   f(v1Conv);
   f(vOwnershipConv);
+  if(vConnectionEmbeddingConv.inChannels > 0) {
+    f(vConnectionEmbeddingConv);
+  }
 }
 
 void ValueHeadDesc::transformToReduceActivations() {
@@ -1564,6 +1604,7 @@ ModelDesc::ModelDesc()
     numValueChannels(0),
     numScoreValueChannels(0),
     numOwnershipChannels(0),
+    numConnectionEmbeddingChannels(0),
     metaEncoderVersion(0),
     postProcessParams()
 {}
@@ -1679,6 +1720,7 @@ ModelDesc::ModelDesc(istream& in, const string& sha256_, bool binaryFloats) {
   numValueChannels = valueHead.v3Mul.outChannels;
   numScoreValueChannels = valueHead.sv3Mul.outChannels;
   numOwnershipChannels = valueHead.vOwnershipConv.outChannels;
+  numConnectionEmbeddingChannels = valueHead.vConnectionEmbeddingConv.outChannels;
 
   if(in.fail())
     throw StringError(name + ": model desc istream fail after parsing model");
@@ -1733,6 +1775,7 @@ ModelDesc& ModelDesc::operator=(ModelDesc&& other) {
   numValueChannels = other.numValueChannels;
   numScoreValueChannels = other.numScoreValueChannels;
   numOwnershipChannels = other.numOwnershipChannels;
+  numConnectionEmbeddingChannels = other.numConnectionEmbeddingChannels;
   metaEncoderVersion = other.metaEncoderVersion;
   postProcessParams = other.postProcessParams;
   trunk = std::move(other.trunk);

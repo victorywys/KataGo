@@ -56,7 +56,7 @@ void Tests::runCanaryTests(NNEvaluator* nnEval, int symmetry, bool print) {
     bool skipCache = true;
     bool includeOwnerMap = true;
     nnInputParams.symmetry = symmetry;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     if(print) {
       cout << board << endl;
@@ -93,7 +93,7 @@ void Tests::runCanaryTests(NNEvaluator* nnEval, int symmetry, bool print) {
     bool skipCache = true;
     bool includeOwnerMap = true;
     nnInputParams.symmetry = symmetry;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     if(print) {
       cout << board << endl;
@@ -129,7 +129,7 @@ void Tests::runCanaryTests(NNEvaluator* nnEval, int symmetry, bool print) {
     bool skipCache = true;
     bool includeOwnerMap = true;
     nnInputParams.symmetry = symmetry;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     if(print) {
       cout << board << endl;
@@ -167,7 +167,7 @@ void Tests::runCanaryTests(NNEvaluator* nnEval, int symmetry, bool print) {
     bool skipCache = true;
     bool includeOwnerMap = true;
     nnInputParams.symmetry = symmetry;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     if(print) {
       cout << board << endl;
@@ -201,7 +201,7 @@ void Tests::runCanaryTests(NNEvaluator* nnEval, int symmetry, bool print) {
     bool skipCache = true;
     bool includeOwnerMap = true;
     nnInputParams.symmetry = symmetry;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     if(print) {
       cout << board << endl;
@@ -234,7 +234,7 @@ void Tests::runCanaryTests(NNEvaluator* nnEval, int symmetry, bool print) {
     bool skipCache = true;
     bool includeOwnerMap = true;
     nnInputParams.symmetry = symmetry;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     if(print) {
       cout << board << endl;
@@ -601,7 +601,7 @@ bool Tests::runBackendErrorTest(
     bool skipCache = true;
     bool includeOwnerMap = true;
     SGFMetadata sgfMeta = SGFMetadata::getProfile("preaz_5k");
-    nnE->evaluate(board,hist,hist.presumedNextMovePla,&sgfMeta,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnE->evaluate(board,hist,hist.presumedNextMovePla,&sgfMeta,nnInputParams,buf,skipCache,includeOwnerMap,false);
     return buf.result;
   };
 

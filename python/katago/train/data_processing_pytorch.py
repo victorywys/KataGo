@@ -74,10 +74,14 @@ def read_npz_training_data(
             else:
                 weightedValueTargetsNC = None
 
-            if include_connection_targets and "connectionTargetsNPP" in npz:
-                connectionTargetsNPP = npz["connectionTargetsNPP"].astype(np.float32)
+            if include_connection_targets and "connectionStrengthTargetsNPP" in npz:
+                connectionStrengthTargetsNPP = npz["connectionStrengthTargetsNPP"].astype(np.float32)
             else:
-                connectionTargetsNPP = None
+                connectionStrengthTargetsNPP = None
+            if include_connection_targets and "ownershipMatchTargetsNPP" in npz:
+                ownershipMatchTargetsNPP = npz["ownershipMatchTargetsNPP"].astype(np.float32)
+            else:
+                ownershipMatchTargetsNPP = None
         del npz
 
         binaryInputNCHW = np.unpackbits(binaryInputNCHWPacked,axis=2)
@@ -118,7 +122,8 @@ def read_npz_training_data(
             metadataInputNC,
             qValueTargetsNCMove,
             weightedValueTargetsNC,
-            connectionTargetsNPP,
+            connectionStrengthTargetsNPP,
+            ownershipMatchTargetsNPP,
         )
 
     if not npz_files:
@@ -139,7 +144,8 @@ def read_npz_training_data(
                 metadataInputNC,
                 qValueTargetsNCMove,
                 weightedValueTargetsNC,
-                connectionTargetsNPP,
+                connectionStrengthTargetsNPP,
+                ownershipMatchTargetsNPP,
             ) = future.result()
 
             num_samples = binaryInputNCHW.shape[0]
@@ -168,8 +174,10 @@ def read_npz_training_data(
                     batch_qValueTargetsNCMove = torch.from_numpy(qValueTargetsNCMove[start:end]).to(device)
                 if include_weighted_values and weightedValueTargetsNC is not None:
                     batch_weightedValueTargetsNC = torch.from_numpy(weightedValueTargetsNC[start:end]).to(device)
-                if include_connection_targets and connectionTargetsNPP is not None:
-                    batch_connectionTargetsNPP = torch.from_numpy(connectionTargetsNPP[start:end]).to(device)
+                if include_connection_targets and connectionStrengthTargetsNPP is not None:
+                    batch_connectionStrengthTargetsNPP = torch.from_numpy(connectionStrengthTargetsNPP[start:end]).to(device)
+                if include_connection_targets and ownershipMatchTargetsNPP is not None:
+                    batch_ownershipMatchTargetsNPP = torch.from_numpy(ownershipMatchTargetsNPP[start:end]).to(device)
 
                 (batch_binaryInputNCHW, batch_globalInputNC) = apply_history_matrices(
                     model_config, batch_binaryInputNCHW, batch_globalInputNC, batch_globalTargetsNC, h_base, h_builder
@@ -185,8 +193,10 @@ def read_npz_training_data(
                     if include_weighted_values and weightedValueTargetsNC is not None:
                         # Weighted targets are [N,5] no symmetry needed
                         pass
-                    if include_connection_targets and connectionTargetsNPP is not None:
-                        batch_connectionTargetsNPP = apply_symmetry_connection_targets(batch_connectionTargetsNPP, symm, pos_len)
+                    if include_connection_targets and connectionStrengthTargetsNPP is not None:
+                        batch_connectionStrengthTargetsNPP = apply_symmetry_connection_targets(batch_connectionStrengthTargetsNPP, symm, pos_len)
+                    if include_connection_targets and ownershipMatchTargetsNPP is not None:
+                        batch_ownershipMatchTargetsNPP = apply_symmetry_connection_targets(batch_ownershipMatchTargetsNPP, symm, pos_len)
 
                 batch_binaryInputNCHW = batch_binaryInputNCHW.contiguous()
                 batch_policyTargetsNCMove = batch_policyTargetsNCMove.contiguous()
@@ -195,8 +205,10 @@ def read_npz_training_data(
                     batch_qValueTargetsNCMove = batch_qValueTargetsNCMove.contiguous()
                 if include_weighted_values and weightedValueTargetsNC is not None:
                     batch_weightedValueTargetsNC = batch_weightedValueTargetsNC.contiguous()
-                if include_connection_targets and connectionTargetsNPP is not None:
-                    batch_connectionTargetsNPP = batch_connectionTargetsNPP.contiguous()
+                if include_connection_targets and connectionStrengthTargetsNPP is not None:
+                    batch_connectionStrengthTargetsNPP = batch_connectionStrengthTargetsNPP.contiguous()
+                if include_connection_targets and ownershipMatchTargetsNPP is not None:
+                    batch_ownershipMatchTargetsNPP = batch_ownershipMatchTargetsNPP.contiguous()
 
                 batch = dict(
                     binaryInputNCHW = batch_binaryInputNCHW,
@@ -212,8 +224,10 @@ def read_npz_training_data(
                     batch["qValueTargetsNCMove"] = batch_qValueTargetsNCMove
                 if include_weighted_values and weightedValueTargetsNC is not None:
                     batch["weightedValueTargetsNC"] = batch_weightedValueTargetsNC
-                if include_connection_targets and connectionTargetsNPP is not None:
-                    batch["connectionTargetsNPP"] = batch_connectionTargetsNPP
+                if include_connection_targets and connectionStrengthTargetsNPP is not None:
+                    batch["connectionStrengthTargetsNPP"] = batch_connectionStrengthTargetsNPP
+                if include_connection_targets and ownershipMatchTargetsNPP is not None:
+                    batch["ownershipMatchTargetsNPP"] = batch_ownershipMatchTargetsNPP
 
                 yield batch
 

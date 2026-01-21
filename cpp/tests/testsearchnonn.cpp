@@ -676,7 +676,7 @@ xx......x
     bool includePVVisits = false;
     bool suc = search->getAnalysisJson(
       perspective, analysisPVLen, preventEncore,
-      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
       json
     );
     testAssert(suc);
@@ -752,7 +752,7 @@ xx......x
     bool includePVVisits = false;
     bool suc = search->getAnalysisJson(
       perspective, analysisPVLen, preventEncore,
-      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
       json
     );
     testAssert(suc);
@@ -828,7 +828,7 @@ xx......x
     bool includePVVisits = false;
     bool suc = search->getAnalysisJson(
       perspective, analysisPVLen, preventEncore,
-      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
       json
     );
     testAssert(suc);
@@ -1218,7 +1218,7 @@ ooooo.oooooooo
     bool includePVVisits = true;
     bool suc = search->getAnalysisJson(
       perspective, analysisPVLen, preventEncore,
-      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
       json
     );
     testAssert(suc);
@@ -1271,7 +1271,7 @@ ooooo.oooooooo
     bool includePVVisits = false;
     bool suc = search->getAnalysisJson(
       perspective, analysisPVLen, preventEncore,
-      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
       json
     );
     testAssert(suc);
@@ -1325,7 +1325,7 @@ ooooo.oooooooo
     bool includePVVisits = false;
     bool suc = search->getAnalysisJson(
       perspective, analysisPVLen, preventEncore,
-      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
       json
     );
     testAssert(suc);
@@ -1377,7 +1377,7 @@ xxxxxxxxx
     bool includePVVisits = false;
     bool suc = search->getAnalysisJson(
       perspective, analysisPVLen, preventEncore,
-      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+      includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
       json
     );
     testAssert(suc);
@@ -1448,7 +1448,7 @@ xxxxxxxxx
       bool includePVVisits = true;
       suc = search->getAnalysisJson(
         perspective, analysisPVLen, preventEncore,
-        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
         json
       );
       cout << "getAnalysisJson success: " << suc << endl;
@@ -1738,7 +1738,7 @@ oo..o..oo
       bool includePVVisits = false;
       bool suc = search->getAnalysisJson(
         perspective, analysisPVLen, preventEncore,
-        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
         json
       );
       testAssert(suc);
@@ -1804,7 +1804,7 @@ oo..o..oo
       bool includePVVisits = false;
       bool suc = search->getAnalysisJson(
         perspective, analysisPVLen, preventEncore,
-        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
         json
       );
       testAssert(suc);
@@ -1850,7 +1850,7 @@ oo..o..oo
       bool includePVVisits = false;
       bool suc = search->getAnalysisJson(
         perspective, analysisPVLen, preventEncore,
-        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, includePVVisits,
+        includePolicy, includeOwnership, includeOwnershipStdev, includeMovesOwnership, includeMovesOwnershipStdev, false, includePVVisits,
         json
       );
       testAssert(suc);

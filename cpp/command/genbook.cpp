@@ -1913,7 +1913,7 @@ int MainCmds::booktoposes(const vector<string>& args) {
         bool skipCache = true; //Always ignore cache so that we use the desired symmetry
         bool includeOwnerMap = false;
         if(policySurpriseWeight > 0 || valueSurpriseWeight > 0)
-          nnEval->evaluate(board,hist,pla,nnInputParams,buf,skipCache,includeOwnerMap);
+          nnEval->evaluate(board,hist,pla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
         if(policySurpriseWeight > 0) {
           if(bestMove != Board::NULL_LOC) {

@@ -3,6 +3,12 @@
 /** Eigen3 backend.
  *
  * Only supports float32 computation with NHWC memory layout (at runtime and as input).
+ *
+ * TODO: Connection map support not yet implemented for Eigen backend.
+ * See OpenCL backend implementation for reference. Required changes:
+ *   - Add vConnectionEmbeddingConv layer to ValueHead
+ *   - Add connection embedding buffer allocation
+ *   - Compute connection matrix from embeddings via matrix multiplication
  */
 
 //TODO someday - not sure how to make thread pool work with TensorMap. It works with Tensor, but TensorMap doesn't seem to have a device(...) method.
@@ -1408,6 +1414,13 @@ struct ValueHead {
   const MatMulLayer sv3Mul;
   const MatBiasLayer sv3Bias;
   const ConvLayer vOwnershipConv;
+  // TODO: Add connection embedding support - need to add:
+  //   - const ConvLayer vConnectionEmbeddingConv;
+  //   - Initialize in constructor from desc.vConnectionEmbeddingConv
+  //   - Update requiredConvWorkspaceElts()
+  //   - Apply convolution in apply() method
+  //   - Compute connection matrix from embeddings (Pos x Pos dot products)
+  //   - Add connectionEmbedding buffer parameter to apply()
 
   ValueHead() = delete;
   ValueHead(const ValueHead&) = delete;

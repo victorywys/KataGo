@@ -49,6 +49,7 @@ struct NNResultBuf {
   std::mutex resultMutex;
   bool hasResult;
   bool includeOwnerMap;
+  bool includeConnectionMap;
   int boardXSizeForServer;
   int boardYSizeForServer;
   std::vector<float> rowSpatialBuf;
@@ -149,7 +150,8 @@ class NNEvaluator {
     const MiscNNInputParams& nnInputParams,
     NNResultBuf& buf,
     bool skipCache,
-    bool includeOwnerMap
+    bool includeOwnerMap,
+    bool includeConnectionMap
   );
   void evaluate(
     Board& board,
@@ -159,7 +161,8 @@ class NNEvaluator {
     const MiscNNInputParams& nnInputParams,
     NNResultBuf& buf,
     bool skipCache,
-    bool includeOwnerMap
+    bool includeOwnerMap,
+    bool includeConnectionMap
   );
   std::shared_ptr<NNOutput>* averageMultipleSymmetries(
     Board& board,
@@ -169,6 +172,7 @@ class NNEvaluator {
     const MiscNNInputParams& baseNNInputParams,
     NNResultBuf& buf,
     bool includeOwnerMap,
+    bool includeConnectionMap,
     Rand& rand,
     int numSymmetriesToSample
   );

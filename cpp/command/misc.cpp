@@ -320,7 +320,7 @@ static void initializeDemoGame(Board& board, BoardHistory& hist, Player& pla, Ra
           NNResultBuf buf;
           MiscNNInputParams nnInputParams;
           nnInputParams.drawEquivalentWinsForWhite = search->searchParams.drawEquivalentWinsForWhite;
-          search->nnEvaluator->evaluate(board,hist,pla,nnInputParams,buf,false,false);
+          search->nnEvaluator->evaluate(board,hist,pla,nnInputParams,buf,false,false,false);
           std::shared_ptr<NNOutput> nnOutput = std::move(buf.result);
 
           double temperature = 0.8;
@@ -1021,7 +1021,7 @@ int MainCmds::samplesgfs(const vector<string>& args) {
         bool skipCache = true;
         bool includeOwnerMap = false;
         lock.unlock();
-        valueFluctuationNNEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+        valueFluctuationNNEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
         lock.lock();
 
         boards.push_back(board);
@@ -1980,7 +1980,7 @@ int MainCmds::dataminesgfs(const vector<string>& args) {
       NNResultBuf buf;
       bool skipCache = true; //Always ignore cache so that we get more entropy on repeated board positions due to symmetries
       bool includeOwnerMap = false;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
       ReportedSearchValues superQuickValues;
       {
@@ -2273,7 +2273,7 @@ int MainCmds::dataminesgfs(const vector<string>& args) {
       int count = 0;
       for(int samples = 0; samples < 4; samples++) {
         NNResultBuf buf;
-        nnEval->evaluate(board,hist,pla,nnInputParams,buf,skipCache,includeOwnerMap);
+        nnEval->evaluate(board,hist,pla,nnInputParams,buf,skipCache,includeOwnerMap,false);
         shared_ptr<NNOutput>& nnOutput = buf.result;
         int pos = NNPos::locToPos(sample.hintLoc,board.x_size,nnOutput->nnXLen,nnOutput->nnYLen);
         double prob = nnOutput->policyProbs[pos];
@@ -3097,7 +3097,7 @@ int MainCmds::checksgfhintpolicy(const vector<string>& args) {
             NNResultBuf buf;
             bool skipCache = true;
             bool includeOwnerMap = false;
-            nnEval->evaluate(board,histBefore,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+            nnEval->evaluate(board,histBefore,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
             shared_ptr<NNOutput> nnOutput = std::move(buf.result);
             int pos = NNPos::locToPos(posSample.moves[posSample.moves.size()-1].loc, board.x_size, nnOutput->nnXLen, nnOutput->nnYLen);

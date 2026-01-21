@@ -314,7 +314,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
     //     NNResultBuf buf;
     //     bool skipCache = true;
     //     bool includeOwnerMap = false;
-    //     nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    //     nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     //     NNOutput* nnOutput = buf.result.get();
     //     vector<double> probs;
@@ -346,7 +346,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
     //     NNResultBuf buf;
     //     bool skipCache = true;
     //     bool includeOwnerMap = false;
-    //     nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    //     nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     //     NNOutput* nnOutput = buf.result.get();
     //     cout << nnOutput->whiteWinProb << " " << nnOutput->shorttermWinlossError << " "
@@ -365,7 +365,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
       bool includeOwnerMap = true;
       MiscNNInputParams nnInputParams;
       nnInputParams.drawEquivalentWinsForWhite = params.drawEquivalentWinsForWhite;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
       cout << "Rules: " << hist.rules << endl;
       cout << "Encore phase " << hist.encorePhase << endl;
@@ -373,7 +373,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
       buf.result->debugPrint(cout,board);
 
       if(humanEval != NULL) {
-        humanEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+        humanEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
         buf.result->debugPrint(cout,board);
       }
       continue;
@@ -640,6 +640,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
       bool includeOwnershipStdev = false;
       bool includeMovesOwnership = false;
       bool includeMovesOwnershipStdev = false;
+      bool includeConnection = false;
       bool includePVVisits = true;
       nlohmann::json ret;
       bool suc = search->getAnalysisJson(
@@ -651,6 +652,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
         includeOwnershipStdev,
         includeMovesOwnership,
         includeMovesOwnershipStdev,
+        includeConnection,
         includePVVisits,
         ret
       );
@@ -688,7 +690,7 @@ int MainCmds::evalsgf(const vector<string>& args) {
       NNResultBuf buf;
       bool skipCache = true;
       bool includeOwnerMap = true;
-      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+      nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
       buf.result->debugPrint(cout,board);
     }
 

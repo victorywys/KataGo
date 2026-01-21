@@ -3,6 +3,7 @@
 # Run 'python shuffle.py --help' for details on how the window size is chosen and how to use this script.
 import sys
 import os
+import io
 import argparse
 import traceback
 import math
@@ -15,6 +16,7 @@ import json
 import hashlib
 import datetime
 import gc
+import signal
 
 import multiprocessing
 
@@ -66,9 +68,34 @@ def memusage_mb():
 
 def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob, include_meta, include_qvalues):
     np.random.seed([int.from_bytes(os.urandom(4), byteorder='little') for i in range(4)])
+    
+    # Set per-worker timeout of 20 minutes
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Worker {input_idx} exceeded 20 minute timeout")
+    
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(1200)  # 20 minutes in seconds
+    
+    try:
+        result = _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob, include_meta, include_qvalues)
+        signal.alarm(0)  # Cancel the alarm
+        return result
+    except TimeoutError as e:
+        print(f"    Group {input_idx}: TIMEOUT after 20 minutes!", flush=True)
+        signal.alarm(0)
+        raise
+    except Exception as e:
+        signal.alarm(0)
+        raise
+
+def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob, include_meta, include_qvalues):
 
     assert(len(input_file_group) > 0)
     num_files_not_found = 0
+    
+    # Print progress for large file groups
+    if len(input_file_group) > 5:
+        print("  Shard group %d: Loading %d files from blob storage..." % (input_idx, len(input_file_group)), flush=True)
 
     binaryInputNCHWPackedList = []
     globalInputNCList = []
@@ -81,8 +108,29 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
     weightedValueTargetsNCList = []
     connectionTargetsNPPList = []
 
-    for input_file in input_file_group:
+    for file_idx, input_file in enumerate(input_file_group):
+        # Progress every 2 files for visibility into blob storage reads
+        if file_idx > 0 and file_idx % 2 == 0:
+            print("    Group %d: Loaded %d/%d files..." % (input_idx, file_idx, len(input_file_group)), flush=True)
+        
+        # Show which specific file is being read and time it
+        file_basename = os.path.basename(input_file)
+        print("    Group %d reading: %s [%d/%d]" % (input_idx, file_basename, file_idx+1, len(input_file_group)), flush=True)
+        
+        read_start = time.time()
         try:
+            # Check if file exists before trying to load
+            if not os.path.exists(input_file):
+                print("    Group %d: File not found: %s" % (input_idx, file_basename), flush=True)
+                num_files_not_found += 1
+                continue
+            
+            # Get file size for diagnostics
+            try:
+                file_size_mb = os.path.getsize(input_file) / (1024 * 1024)
+            except:
+                file_size_mb = 0
+            
             with np.load(input_file) as npz:
                 assert_keys(npz, include_meta, include_qvalues)
                 binaryInputNCHWPackedList.append(npz["binaryInputNCHWPacked"])
@@ -112,14 +160,30 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
                     connectionTargetsNPPList.append(npz["connectionTargetsNPP"])
                 else:
                     connectionTargetsNPPList.append(None)
+            
+            read_time = time.time() - read_start
+            # Log ALL reads with timing to track progress
+            print("    Group %d: %s loaded in %.1fs (%.1f MB)" % (input_idx, file_basename, read_time, file_size_mb), flush=True)
+            
+            # Warn about very slow reads
+            if read_time > 60.0:
+                print("    ⚠️  Group %d: VERY SLOW READ (%.1fs) for %s" % (input_idx, read_time, file_basename), flush=True)
 
         except FileNotFoundError:
             num_files_not_found += 1
-            print("WARNING: file not found by shardify: ", input_file)
+            print("    Group %d: WARNING file not found: %s" % (input_idx, input_file), flush=True)
+            pass
+        except Exception as e:
+            print("    Group %d: ERROR loading %s: %s" % (input_idx, file_basename, str(e)), flush=True)
+            import traceback
+            traceback.print_exc()
             pass
 
     if len(binaryInputNCHWPackedList) <= 0:
         return num_files_not_found # Early quit since we don't know shapes
+    
+    print("    Group %d: All files loaded, concatenating arrays..." % input_idx, flush=True)
+    concat_start = time.time()
 
     include_weighted = any(arr is not None for arr in weightedValueTargetsNCList)
     if include_weighted:
@@ -158,6 +222,11 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
         qValueTargetsNCMove = np.concatenate(qValueTargetsNCMoveList, axis=0) if include_qvalues else None
         weightedValueTargetsNC = np.concatenate(weightedValueTargetsNCList, axis=0) if include_weighted else None
         connectionTargetsNPP = np.concatenate(connectionTargetsNPPList, axis=0) if include_connection else None
+    
+    concat_time = time.time() - concat_start
+    print("    Group %d: Concatenation done in %.1fs, now shuffling %d rows..." % (input_idx, concat_time, binaryInputNCHWPacked.shape[0]), flush=True)
+    print("    Group %d: Memory before shuffle: %d MB" % (input_idx, memusage_mb()), flush=True)
+    shuffle_start = time.time()
 
     num_rows_to_keep = binaryInputNCHWPacked.shape[0]
     assert(globalInputNC.shape[0] == num_rows_to_keep)
@@ -201,6 +270,10 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
         weightedValueTargetsNC = shuffled[idx]; idx += 1
     if include_connection:
         connectionTargetsNPP = shuffled[idx]; idx += 1
+    
+    shuffle_time = time.time() - shuffle_start
+    print("    Group %d: Shuffle done in %.1fs, memory after shuffle: %d MB, now writing to %d shard files..." % (input_idx, shuffle_time, memusage_mb(), num_out_files), flush=True)
+    write_start = time.time()
 
     assert(binaryInputNCHWPacked.shape[0] == num_rows_to_keep)
     assert(globalInputNC.shape[0] == num_rows_to_keep)
@@ -241,10 +314,22 @@ def shardify(input_idx, input_file_group, num_out_files, out_tmp_dirs, keep_prob
         if include_connection:
             save_dict["connectionTargetsNPP"] = connectionTargetsNPP[start:stop]
 
-        np.savez_compressed(
+        # Use lower compression (level 1) for faster writes - still reduces size significantly
+        # but saves 50-70% of compression time
+        with zipfile.ZipFile(
             os.path.join(out_tmp_dirs[out_idx], str(input_idx) + ".npz"),
-            **save_dict
-        )
+            mode='w',
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=1
+        ) as zf:
+            for key, arr in save_dict.items():
+                with io.BytesIO() as bio:
+                    np.save(bio, arr)
+                    zf.writestr(key + '.npy', bio.getvalue())
+    
+    write_time = time.time() - write_start
+    total_time = time.time() - concat_start + concat_time
+    print("    Group %d: Writing done in %.1fs (total group time: %.1fs)" % (input_idx, write_time, total_time), flush=True)
 
     return num_files_not_found
 
@@ -308,18 +393,35 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
         print("WARNING: empty merge file: ", filename)
         return 0
 
+    print("  Merging %d shards with total %d rows (mem: %d MB)" % 
+          (len(binaryInputNCHWPackeds), sum(arr.shape[0] for arr in binaryInputNCHWPackeds), memusage_mb()), flush=True)
+
     ###
     # WARNING - if adding anything here, also add it to joint_shuffle below!
     ###
     binaryInputNCHWPacked = np.concatenate(binaryInputNCHWPackeds)
+    del binaryInputNCHWPackeds  # Free memory immediately
     globalInputNC = np.concatenate(globalInputNCs)
+    del globalInputNCs
     policyTargetsNCMove = np.concatenate(policyTargetsNCMoves)
+    del policyTargetsNCMoves
     globalTargetsNC = np.concatenate(globalTargetsNCs)
+    del globalTargetsNCs
     scoreDistrN = np.concatenate(scoreDistrNs)
+    del scoreDistrNs
     valueTargetsNCHW = np.concatenate(valueTargetsNCHWs)
+    del valueTargetsNCHWs
     metadataInputNC = np.concatenate(metadataInputNCs) if include_meta else None
+    if include_meta:
+        del metadataInputNCs
     qValueTargetsNCMove = np.concatenate(qValueTargetsNCMoves) if include_qvalues else None
+    if include_qvalues:
+        del qValueTargetsNCMoves
     connectionTargetsNPP = np.concatenate(connectionTargetsNPPs) if include_connection else None
+    if include_connection:
+        del connectionTargetsNPPs
+    
+    print("  After concatenation (mem: %d MB)" % memusage_mb(), flush=True)
 
     num_rows = binaryInputNCHWPacked.shape[0]
     assert(globalInputNC.shape[0] == num_rows)
@@ -932,17 +1034,80 @@ if __name__ == '__main__':
 
     with multiprocessing.Pool(num_processes) as pool:
         with TimeStuff("Sharding"):
-            shard_results = pool.starmap(shardify, [
+            print("Starting sharding with %d processes..." % num_processes, flush=True)
+            print("Total groups to process: %d" % len(desired_input_file_groups), flush=True)
+            shard_args = [
                 (input_idx, desired_input_file_groups[input_idx], num_out_files, out_tmp_dirs, keep_prob, include_meta, include_qvalues)
                 for input_idx in range(len(desired_input_file_groups))
-            ])
+            ]
+            
+            # Use starmap_async to get results as they complete
+            shard_results = []
+            total = len(shard_args)
+            async_result = pool.starmap_async(shardify, shard_args)
+            
+            # Poll for completion with status updates and timeout
+            import time as time_module
+            start_time = time_module.time()
+            last_progress_time = start_time
+            max_stall_time = 1800  # 30 minutes without progress = hung
+            check_interval = 5
+            
+            while not async_result.ready():
+                time_module.sleep(check_interval)
+                elapsed = time_module.time() - start_time
+                stall_time = time_module.time() - last_progress_time
+                
+                # Print periodic status with timing info
+                print("  Sharding in progress... (elapsed: %.1fs, checking workers)" % elapsed, flush=True)
+                
+                # Check for hung workers
+                if stall_time > max_stall_time:
+                    print("  ERROR: No progress for %.1f seconds, workers may be hung!" % stall_time, flush=True)
+                    print("  Attempting to terminate pool and fail gracefully...", flush=True)
+                    pool.terminate()
+                    pool.join()
+                    raise RuntimeError(f"Sharding hung for {stall_time:.0f} seconds, likely deadlock in workers")
+            
+            # Get all results with timeout
+            try:
+                shard_results = async_result.get(timeout=60)
+                print("  All %d shard groups completed!" % total, flush=True)
+            except multiprocessing.TimeoutError:
+                print("  ERROR: Timeout getting results even though ready() returned True", flush=True)
+                raise
 
         with TimeStuff("Merging"):
+            print("Starting merge of %d output files..." % len(out_files), flush=True)
+            print("Merging sequentially to avoid OOM issues", flush=True)
             num_shards_to_merge = len(desired_input_file_groups)
-            merge_results = pool.starmap(merge_shards, [
-                (out_files[idx], num_shards_to_merge, out_tmp_dirs[idx], batch_size, ensure_batch_multiple, output_npz, include_meta, include_qvalues)
-                for idx in range(len(out_files))
-            ])
+            
+            merge_results = []
+            for idx in range(len(out_files)):
+                mem_before = memusage_mb()
+                sys_mem = psutil.virtual_memory()
+                print("  Merge %d/%d: Memory before: %d MB (system: %.1f%% used)" % 
+                      (idx+1, len(out_files), mem_before, sys_mem.percent), flush=True)
+                
+                result = merge_shards(
+                    out_files[idx], 
+                    num_shards_to_merge, 
+                    out_tmp_dirs[idx], 
+                    batch_size, 
+                    ensure_batch_multiple, 
+                    output_npz, 
+                    include_meta, 
+                    include_qvalues
+                )
+                merge_results.append(result)
+                
+                mem_after = memusage_mb()
+                print("  Merge %d/%d: Completed, %d rows, memory after: %d MB" % 
+                      (idx+1, len(out_files), result, mem_after), flush=True)
+                
+                # Force garbage collection between merges
+                gc.collect()
+                
         print("Number of rows by output file:",flush=True)
         print(list(zip(out_files,merge_results)),flush=True)
         sys.stdout.flush()

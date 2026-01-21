@@ -6,7 +6,7 @@
 #include "../core/using.h"
 //------------------------
 
-void Search::computeRootNNEvaluation(NNResultBuf& nnResultBuf, bool includeOwnerMap) {
+void Search::computeRootNNEvaluation(NNResultBuf& nnResultBuf, bool includeOwnerMap, bool includeConnectionMap) {
   Board board = rootBoard;
   const BoardHistory& hist = rootHistory;
   Player pla = rootPla;
@@ -30,7 +30,7 @@ void Search::computeRootNNEvaluation(NNResultBuf& nnResultBuf, bool includeOwner
   nnEvaluator->evaluate(
     board, hist, pla, &searchParams.humanSLProfile,
     nnInputParams,
-    nnResultBuf, skipCache, includeOwnerMap
+    nnResultBuf, skipCache, includeOwnerMap, includeConnectionMap
   );
 }
 
@@ -54,6 +54,7 @@ bool Search::initNodeNNOutput(
   bool isRoot, bool skipCache, bool isReInit
 ) {
   bool includeOwnerMap = isRoot || alwaysIncludeOwnerMap;
+  bool includeConnectionMap = isRoot || alwaysIncludeConnectionMap;
   bool antiMirrorDifficult = false;
   if(searchParams.antiMirror && mirroringPla != C_EMPTY && mirrorAdvantage >= -0.5 &&
      Location::getCenterLoc(thread.board) != Board::NULL_LOC && thread.board.colors[Location::getCenterLoc(thread.board)] == getOpp(rootPla) &&
@@ -87,14 +88,14 @@ bool Search::initNodeNNOutput(
     result = nnEvaluator->averageMultipleSymmetries(
       thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
       nnInputParams,
-      thread.nnResultBuf, includeOwnerMap,
+      thread.nnResultBuf, includeOwnerMap, includeConnectionMap,
       thread.rand, searchParams.rootNumSymmetriesToSample
     );
     if(needsHumanOutputInTree() || (isRoot && needsHumanOutputAtRoot())) {
       humanResult = humanEvaluator->averageMultipleSymmetries(
         thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
         nnInputParams,
-        thread.nnResultBuf, includeOwnerMap,
+        thread.nnResultBuf, includeOwnerMap, includeConnectionMap,
         thread.rand, searchParams.rootNumSymmetriesToSample
       );
     }
@@ -103,14 +104,14 @@ bool Search::initNodeNNOutput(
     nnEvaluator->evaluate(
       thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
       nnInputParams,
-      thread.nnResultBuf, skipCache, includeOwnerMap
+      thread.nnResultBuf, skipCache, includeOwnerMap, includeConnectionMap
     );
     result = new std::shared_ptr<NNOutput>(std::move(thread.nnResultBuf.result));
     if(needsHumanOutputInTree() || (isRoot && needsHumanOutputAtRoot())) {
       humanEvaluator->evaluate(
         thread.board, thread.history, thread.pla, &searchParams.humanSLProfile,
         nnInputParams,
-        thread.nnResultBuf, skipCache, includeOwnerMap
+        thread.nnResultBuf, skipCache, includeOwnerMap, includeConnectionMap
       );
       humanResult = new std::shared_ptr<NNOutput>(std::move(thread.nnResultBuf.result));
     }

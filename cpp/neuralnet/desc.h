@@ -311,6 +311,7 @@ struct ValueHeadDesc {
   MatMulLayerDesc sv3Mul;
   MatBiasLayerDesc sv3Bias;
   ConvLayerDesc vOwnershipConv;
+  ConvLayerDesc vConnectionEmbeddingConv;  // Optional connection embedding layer
 
   ValueHeadDesc();
   ~ValueHeadDesc();
@@ -354,6 +355,7 @@ struct ModelDesc {
   int numValueChannels;
   int numScoreValueChannels;
   int numOwnershipChannels;
+  int numConnectionEmbeddingChannels;  // Number of connection embedding channels, 0 if no connection head
 
   int metaEncoderVersion;
 

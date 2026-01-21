@@ -1987,6 +1987,186 @@ std::pair<std::vector<double>,std::vector<double>> Search::getAverageAndStandard
   return std::make_pair(ownershipToOutput, ownershipStdevToOutput);
 }
 
+// ========================================================================
+// Connection map aggregation
+// ========================================================================
+
+vector<double> Search::getAverageTreeConnection(const SearchNode* node) const {
+  if(node == NULL)
+    node = rootNode;
+  if(!alwaysIncludeConnectionMap)
+    throw StringError("Called Search::getAverageTreeConnection when alwaysIncludeConnectionMap is false");
+  
+  int posLen = nnXLen * nnYLen;
+  vector<double> vec(posLen * posLen, 0.0);
+  
+  auto accumulate = [&vec, posLen](float* connectionMap, double selfProp){
+    for(int i = 0; i < posLen * posLen; i++)
+      vec[i] += selfProp * connectionMap[i];
+  };
+  
+  int64_t visits = node->stats.visits.load(std::memory_order_acquire);
+  double minProp = 0.5 / pow(std::max(1.0, (double)visits), 0.75);
+  double pruneProp = minProp * 0.01;
+  std::unordered_set<const SearchNode*> graphPath;
+  traverseTreeForConnection(minProp, pruneProp, 1.0, node, graphPath, accumulate);
+  return vec;
+}
+
+std::vector<double> Search::getAverageTreeConnection(
+  const SearchNode* node,
+  int symmetry
+) const {
+  const vector<double> connection = getAverageTreeConnection(node);
+  const Board& board = rootBoard;
+  int posLen = board.y_size * board.x_size;
+  vector<double> connectionToOutput(posLen * posLen, 0.0);
+
+  for(int y1 = 0; y1 < board.y_size; y1++) {
+    for(int x1 = 0; x1 < board.x_size; x1++) {
+      int pos1 = NNPos::xyToPos(x1, y1, nnXLen);
+      Loc symLoc1 = SymmetryHelpers::getSymLoc(x1, y1, board, symmetry);
+      int symPos1 = Location::getY(symLoc1, board.x_size) * board.x_size + Location::getX(symLoc1, board.x_size);
+      
+      for(int y2 = 0; y2 < board.y_size; y2++) {
+        for(int x2 = 0; x2 < board.x_size; x2++) {
+          int pos2 = NNPos::xyToPos(x2, y2, nnXLen);
+          Loc symLoc2 = SymmetryHelpers::getSymLoc(x2, y2, board, symmetry);
+          int symPos2 = Location::getY(symLoc2, board.x_size) * board.x_size + Location::getX(symLoc2, board.x_size);
+          
+          double c = connection[pos1 * nnXLen * nnYLen + pos2];
+          connectionToOutput[symPos1 * posLen + symPos2] = Global::roundStatic(c, 1000000.0);
+        }
+      }
+    }
+  }
+  return connectionToOutput;
+}
+
+template<typename Func>
+bool Search::traverseTreeForConnection(
+  double minProp,
+  double pruneProp,
+  double desiredProp,
+  const SearchNode* node,
+  std::unordered_set<const SearchNode*>& graphPath,
+  Func& accumulate
+) const {
+  if(node == NULL)
+    return false;
+
+  const NNOutput* nnOutput = node->getNNOutput();
+  if(nnOutput == NULL)
+    return false;
+
+  // Base case
+  if(desiredProp < minProp) {
+    float* connectionMap = nnOutput->whiteConnectionMap;
+    assert(connectionMap != NULL);
+    accumulate(connectionMap, desiredProp);
+    return true;
+  }
+
+  ConstSearchNodeChildrenReference children = node->getChildren();
+  int childrenCapacity = children.getCapacity();
+
+  if(childrenCapacity <= 0) {
+    float* connectionMap = nnOutput->whiteConnectionMap;
+    assert(connectionMap != NULL);
+    accumulate(connectionMap, desiredProp);
+    return true;
+  }
+
+  std::pair<std::unordered_set<const SearchNode*>::iterator,bool> result = graphPath.insert(node);
+  if(!result.second) {
+    float* connectionMap = nnOutput->whiteConnectionMap;
+    assert(connectionMap != NULL);
+    accumulate(connectionMap, desiredProp);
+    return true;
+  }
+
+  double selfProp;
+  double parentNNWeight = computeWeightFromNNOutput(nnOutput);
+  if(childrenCapacity <= SearchChildrenSizes::SIZE0TOTAL) {
+    double childWeightBuf[SearchChildrenSizes::SIZE0TOTAL];
+    selfProp = traverseTreeForConnectionChildren(
+      minProp, pruneProp, desiredProp, parentNNWeight, children, childWeightBuf, childrenCapacity, graphPath, accumulate
+    );
+  }
+  else {
+    vector<double> childWeightBuf(childrenCapacity);
+    selfProp = traverseTreeForConnectionChildren(
+      minProp, pruneProp, desiredProp, parentNNWeight, children, childWeightBuf.data(), childrenCapacity, graphPath, accumulate
+    );
+  }
+
+  graphPath.erase(node);
+
+  if(selfProp > pruneProp) {
+    float* connectionMap = nnOutput->whiteConnectionMap;
+    assert(connectionMap != NULL);
+    accumulate(connectionMap, selfProp);
+  }
+  return true;
+}
+
+template<typename Func>
+double Search::traverseTreeForConnectionChildren(
+  double minProp,
+  double pruneProp,
+  double desiredProp,
+  double parentNNWeight,
+  ConstSearchNodeChildrenReference children,
+  double* childWeightBuf,
+  int childrenCapacity,
+  std::unordered_set<const SearchNode*>& graphPath,
+  Func& accumulate
+) const {
+  int numChildren = 0;
+  for(int i = 0; i<childrenCapacity; i++) {
+    const SearchChildPointer& childPointer = children[i];
+    const SearchNode* child = childPointer.getIfAllocated();
+    if(child == NULL)
+      break;
+    int64_t edgeVisits = childPointer.getEdgeVisits();
+    double childWeight = child->stats.getChildWeight(edgeVisits);
+    childWeightBuf[i] = childWeight;
+    numChildren += 1;
+  }
+
+  double relativeChildrenWeightSum = 0.0;
+  double childrenWeightSum = 0;
+  for(int i = 0; i<numChildren; i++) {
+    double childWeight = childWeightBuf[i];
+    relativeChildrenWeightSum += (double)childWeight * childWeight;
+    childrenWeightSum += childWeight;
+  }
+
+  parentNNWeight = std::max(parentNNWeight, 1e-10);
+  double desiredPropFromChildren = desiredProp * childrenWeightSum / (childrenWeightSum + parentNNWeight);
+  double selfProp = desiredProp * parentNNWeight / (childrenWeightSum + parentNNWeight);
+
+  if(desiredPropFromChildren <= 0.0 || relativeChildrenWeightSum <= 0.0) {
+    selfProp += desiredPropFromChildren;
+  }
+  else {
+    for(int i = 0; i<numChildren; i++) {
+      double childWeight = childWeightBuf[i];
+      const SearchNode* child = children[i].getIfAllocated();
+      assert(child != NULL);
+      double desiredPropFromChild = (double)childWeight * childWeight / relativeChildrenWeightSum * desiredPropFromChildren;
+      if(desiredPropFromChild < pruneProp)
+        selfProp += desiredPropFromChild;
+      else {
+        bool accumulated = traverseTreeForConnection(minProp, pruneProp, desiredPropFromChild, child, graphPath, accumulate);
+        if(!accumulated)
+          selfProp += desiredPropFromChild;
+      }
+    }
+  }
+  
+  return selfProp;
+}
 
 bool Search::getAnalysisJson(
   const Player perspective,
@@ -1997,6 +2177,7 @@ bool Search::getAnalysisJson(
   bool includeOwnershipStdev,
   bool includeMovesOwnership,
   bool includeMovesOwnershipStdev,
+  bool includeConnection,
   bool includePVVisits,
   json& ret
 ) const {
@@ -2210,6 +2391,13 @@ bool Search::getAnalysisJson(
   else if(includeOwnership) {
     int symmetry = 0;
     ret["ownership"] = json(getAverageTreeOwnership(perspective, rootNode, symmetry));
+  }
+
+  // Connection map
+  if(includeConnection) {
+    int symmetry = 0;
+    // Return flattened Pos×Pos matrix representing connection[i][j] for all position pairs
+    ret["connection"] = json(getAverageTreeConnection(rootNode, symmetry));
   }
 
   return true;

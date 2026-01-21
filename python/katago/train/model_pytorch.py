@@ -1407,20 +1407,28 @@ class ValueHead(torch.nn.Module):
         self.conv_futurepos = torch.nn.Conv2d(c_in, 2, kernel_size=1, padding="same", bias=False)
         self.conv_seki = torch.nn.Conv2d(c_in, 4, kernel_size=1, padding="same", bias=False)
 
-        # Optional: connection head producing (N,Pos,Pos) logits from per-point embeddings.
+        # Optional: connection head with two-task spatial convolution architecture.
+        # Task 1: Connection strength (are positions in same group?)
+        # Task 2: Ownership match (do positions have same ownership color?)
         conn_cfg = config.get("connection_head", {}) if isinstance(config, dict) else {}
         self.has_connection_head = bool(conn_cfg.get("enabled", False))
-        self.connection_embed_channels = int(conn_cfg.get("embedding_channels", 16))
+        self.connection_sample_k = int(conn_cfg.get("sample_k", 20))  # Number of query positions during training
         if self.has_connection_head:
-            if self.connection_embed_channels <= 0:
-                raise ValueError("connection_head.embedding_channels must be > 0")
-            self.conv_connection_embed = torch.nn.Conv2d(
-                c_v1,
-                self.connection_embed_channels,
-                kernel_size=1,
-                padding="same",
-                bias=False,
-            )
+            # Shared feature processing
+            self.conv_connection_shared1 = torch.nn.Conv2d(c_v1, 128, kernel_size=3, padding=1, bias=False)
+            self.norm_connection_shared1 = torch.nn.BatchNorm2d(128)
+            self.conv_connection_shared2 = torch.nn.Conv2d(128, 64, kernel_size=3, padding=1, bias=False)
+            self.norm_connection_shared2 = torch.nn.BatchNorm2d(64)
+            
+            # Task 1: Connection strength head
+            self.conv_connection_strength1 = torch.nn.Conv2d(64 * 2, 32, kernel_size=3, padding=1, bias=False)
+            self.norm_connection_strength1 = torch.nn.BatchNorm2d(32)
+            self.conv_connection_strength2 = torch.nn.Conv2d(32, 1, kernel_size=1, padding="same", bias=False)
+            
+            # Task 2: Ownership match head
+            self.conv_connection_match1 = torch.nn.Conv2d(64 * 2, 32, kernel_size=3, padding=1, bias=False)
+            self.norm_connection_match1 = torch.nn.BatchNorm2d(32)
+            self.conv_connection_match2 = torch.nn.Conv2d(32, 1, kernel_size=1, padding="same", bias=False)
 
         self.pos_len = pos_len
         self.scorebelief_mid = self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS
@@ -1472,7 +1480,12 @@ class ValueHead(torch.nn.Module):
         init_weights(self.conv_futurepos.weight, "identity", scale=aux_spatial_output_scale)
         init_weights(self.conv_seki.weight, "identity", scale=aux_spatial_output_scale)
         if self.has_connection_head:
-            init_weights(self.conv_connection_embed.weight, "identity", scale=aux_spatial_output_scale)
+            init_weights(self.conv_connection_shared1.weight, self.activation, scale=1.0)
+            init_weights(self.conv_connection_shared2.weight, self.activation, scale=1.0)
+            init_weights(self.conv_connection_strength1.weight, self.activation, scale=1.0)
+            init_weights(self.conv_connection_strength2.weight, "identity", scale=aux_spatial_output_scale)
+            init_weights(self.conv_connection_match1.weight, self.activation, scale=1.0)
+            init_weights(self.conv_connection_match2.weight, "identity", scale=aux_spatial_output_scale)
 
         init_weights(self.linear_s2.weight, self.activation, scale=1.0)
         init_weights(self.linear_s2.bias, self.activation, scale=1.0, fan_tensor=self.linear_s2.weight)
@@ -1500,7 +1513,12 @@ class ValueHead(torch.nn.Module):
         reg_dict["output"].append(self.conv_futurepos.weight)
         reg_dict["output"].append(self.conv_seki.weight)
         if self.has_connection_head:
-            reg_dict["output"].append(self.conv_connection_embed.weight)
+            reg_dict["output"].append(self.conv_connection_shared1.weight)
+            reg_dict["output"].append(self.conv_connection_shared2.weight)
+            reg_dict["output"].append(self.conv_connection_strength1.weight)
+            reg_dict["output"].append(self.conv_connection_strength2.weight)
+            reg_dict["output"].append(self.conv_connection_match1.weight)
+            reg_dict["output"].append(self.conv_connection_match2.weight)
         reg_dict["output"].append(self.linear_s2.weight)
         reg_dict["output_noreg"].append(self.linear_s2.bias)
         reg_dict["output"].append(self.linear_s2off.weight)
@@ -1537,14 +1555,70 @@ class ValueHead(torch.nn.Module):
         out_futurepos = self.conv_futurepos(x) * mask
         out_seki = self.conv_seki(x) * mask
 
-        out_connection_logits = None
+        out_connection_strength = None
+        out_connection_match = None
+        out_connection_indices = None
         if self.has_connection_head:
-            # Build per-point embeddings and compute pairwise logits via dot product.
-            emb = self.conv_connection_embed(outv1) * mask  # N, Cemb, H, W
-            batch_size = emb.shape[0]
+            # Extract shared features for connection prediction
+            conn_features = self.conv_connection_shared1(outv1)
+            conn_features = self.norm_connection_shared1(conn_features)
+            conn_features = self.act(conn_features)
+            conn_features = self.conv_connection_shared2(conn_features)
+            conn_features = self.norm_connection_shared2(conn_features)
+            conn_features = self.act(conn_features) * mask  # N, 64, H, W
+            
+            batch_size = conn_features.shape[0]
             pos = self.pos_len * self.pos_len
-            emb = emb.view(batch_size, self.connection_embed_channels, pos).transpose(1, 2)  # N, Pos, Cemb
-            out_connection_logits = torch.matmul(emb, emb.transpose(1, 2)) / math.sqrt(float(self.connection_embed_channels))
+            h = w = self.pos_len
+            
+            # Flatten spatial dimensions: N, 64, H, W -> N, 64, Pos
+            conn_flat = conn_features.view(batch_size, 64, pos)
+            
+            # Sample K query positions during training, use all positions during inference
+            if self.training:
+                K = self.connection_sample_k
+                # Sample K random positions per batch
+                indices = torch.randint(0, pos, (batch_size, K), device=conn_features.device)
+            else:
+                K = pos
+                indices = torch.arange(pos, device=conn_features.device).unsqueeze(0).expand(batch_size, -1)
+            
+            # Gather query features for sampled positions: N, 64, Pos -> N, K, 64
+            query_features = torch.gather(
+                conn_flat.transpose(1, 2),  # N, Pos, 64
+                1,  # dim
+                indices.unsqueeze(-1).expand(-1, -1, 64)  # N, K, 64
+            )  # Result: N, K, 64
+            
+            # Reshape query features for broadcasting: N*K, 64, 1, 1
+            query_features_expanded = query_features.reshape(batch_size * K, 64, 1, 1)
+            
+            # Expand to spatial dimensions: N*K, 64, H, W
+            query_features_broadcast = query_features_expanded.expand(-1, -1, h, w)
+            
+            # Repeat conn_features for each query position: N, 64, H, W -> N*K, 64, H, W
+            conn_features_repeated = conn_features.unsqueeze(1).expand(-1, K, -1, -1, -1).reshape(batch_size * K, 64, h, w)
+            
+            # Concatenate query and all-position features: N*K, 128, H, W
+            combined_features = torch.cat([query_features_broadcast, conn_features_repeated], dim=1)
+            
+            # Task 1: Connection Strength Head
+            strength_features = self.conv_connection_strength1(combined_features)
+            strength_features = self.norm_connection_strength1(strength_features)
+            strength_features = self.act(strength_features)
+            strength_logits = self.conv_connection_strength2(strength_features)  # N*K, 1, H, W
+            strength_logits = strength_logits.view(batch_size, K, pos)  # N, K, Pos
+            
+            # Task 2: Ownership Match Head
+            match_features = self.conv_connection_match1(combined_features)
+            match_features = self.norm_connection_match1(match_features)
+            match_features = self.act(match_features)
+            match_logits = self.conv_connection_match2(match_features)  # N*K, 1, H, W
+            match_logits = match_logits.view(batch_size, K, pos)  # N, K, Pos
+            
+            out_connection_strength = strength_logits
+            out_connection_match = match_logits
+            out_connection_indices = indices
 
         # Score belief head
         batch_size = x.shape[0]
@@ -1574,8 +1648,8 @@ class ValueHead(torch.nn.Module):
             out_seki,
             out_scorebelief_logprobs,
         )
-        if out_connection_logits is not None:
-            base = base + (out_connection_logits,)
+        if out_connection_strength is not None:
+            base = base + (out_connection_strength, out_connection_match, out_connection_indices)
         return base
 
 class WeightedValueHead(torch.nn.Module):

@@ -425,6 +425,10 @@ def main(args):
 
         write_conv(name+".conv_ownership",valuehead.conv_ownership)
 
+        # Export connection embedding layer if present
+        if hasattr(valuehead, 'has_connection_head') and valuehead.has_connection_head:
+            write_conv(name+".conv_connection_embed", valuehead.conv_connection_embed)
+
     def write_model(model):
         write_trunk("model",model)
         write_policy_head("model.policy_head",model.policy_head)

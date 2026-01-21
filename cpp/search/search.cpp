@@ -83,6 +83,7 @@ Search::Search(SearchParams params, NNEvaluator* nnEval, NNEvaluator* humanEval,
    mirrorAdvantage(0.0),
    mirrorCenterSymmetryError(1e10),
    alwaysIncludeOwnerMap(false),
+   alwaysIncludeConnectionMap(false),
    searchParams(params),
    boardWeights(nullptr),
    numSearchesBegun(0),searchNodeAge(0),
@@ -245,6 +246,12 @@ void Search::setAlwaysIncludeOwnerMap(bool b) {
   if(!alwaysIncludeOwnerMap && b)
     clearSearch();
   alwaysIncludeOwnerMap = b;
+}
+
+void Search::setAlwaysIncludeConnectionMap(bool b) {
+  if(!alwaysIncludeConnectionMap && b)
+    clearSearch();
+  alwaysIncludeConnectionMap = b;
 }
 
 void Search::setRootSymmetryPruningOnly(const std::vector<int>& v) {
@@ -1111,7 +1118,8 @@ void Search::computeRootValues() {
     if(!foundExpectedScoreFromTree) {
       NNResultBuf nnResultBuf;
       bool includeOwnerMap = true;
-      computeRootNNEvaluation(nnResultBuf,includeOwnerMap);
+      bool includeConnectionMap = false;
+      computeRootNNEvaluation(nnResultBuf,includeOwnerMap,includeConnectionMap);
       expectedScore = nnResultBuf.result->whiteScoreMean;
     }
 

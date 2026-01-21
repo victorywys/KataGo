@@ -33,6 +33,7 @@ struct AnalyzeRequest {
   bool includeOwnershipStdev;
   bool includeMovesOwnership;
   bool includeMovesOwnershipStdev;
+  bool includeConnection;
   bool includePolicy;
   bool includePVVisits;
 
@@ -236,6 +237,7 @@ int MainCmds::analysis(const vector<string>& args) {
     "includeMovesOwnershipStdev",
     "includeOwnership",
     "includeOwnershipStdev",
+    "includeConnection",
     "includePolicy",
     "includePVVisits",
     "reportDuringSearchEvery",
@@ -322,6 +324,7 @@ int MainCmds::analysis(const vector<string>& args) {
       request->analysisPVLen, preventEncore, request->includePolicy,
       request->includeOwnership,request->includeOwnershipStdev,
       request->includeMovesOwnership,request->includeMovesOwnershipStdev,
+      request->includeConnection,
       request->includePVVisits,
       ret
     );
@@ -349,6 +352,7 @@ int MainCmds::analysis(const vector<string>& args) {
       else {
         bot->setPosition(request->nextPla,request->board,request->hist);
         bot->setAlwaysIncludeOwnerMap(request->includeOwnership || request->includeOwnershipStdev || request->includeMovesOwnership || request->includeMovesOwnershipStdev);
+        bot->setAlwaysIncludeConnectionMap(request->includeConnection);
         bot->setParams(request->params);
         bot->setAvoidMoveUntilByLoc(request->avoidMoveUntilByLocBlack,request->avoidMoveUntilByLocWhite);
 
@@ -608,6 +612,7 @@ int MainCmds::analysis(const vector<string>& args) {
       rbase.includeOwnershipStdev = false;
       rbase.includeMovesOwnership = false;
       rbase.includeMovesOwnershipStdev = false;
+      rbase.includeConnection = false;
       rbase.includePolicy = false;
       rbase.includePVVisits = false;
       rbase.reportDuringSearch = false;
@@ -1009,6 +1014,11 @@ int MainCmds::analysis(const vector<string>& args) {
         if(!suc)
           continue;
       }
+      if(input.find("includeConnection") != input.end()) {
+        bool suc = parseBoolean(input, "includeConnection", rbase.includeConnection, "Must be a boolean");
+        if(!suc)
+          continue;
+      }
       if(input.find("includePolicy") != input.end()) {
         bool suc = parseBoolean(input, "includePolicy", rbase.includePolicy, "Must be a boolean");
         if(!suc)
@@ -1161,6 +1171,7 @@ int MainCmds::analysis(const vector<string>& args) {
           newRequest->includeOwnershipStdev = rbase.includeOwnershipStdev;
           newRequest->includeMovesOwnership = rbase.includeMovesOwnership;
           newRequest->includeMovesOwnershipStdev = rbase.includeMovesOwnershipStdev;
+          newRequest->includeConnection = rbase.includeConnection;
           newRequest->includePolicy = rbase.includePolicy;
           newRequest->includePVVisits = rbase.includePVVisits;
           newRequest->reportDuringSearch = rbase.reportDuringSearch;

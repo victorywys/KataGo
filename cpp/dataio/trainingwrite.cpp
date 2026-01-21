@@ -294,7 +294,8 @@ TrainingWriteBuffers::TrainingWriteBuffers(int iVersion, int maxRws, int numBCha
    globalTargetsNC({maxRws, GLOBAL_TARGET_NUM_CHANNELS}),
    scoreDistrN({maxRws, xLen*yLen*2+NNPos::EXTRA_SCORE_DISTR_RADIUS*2}),
    valueTargetsNCHW({maxRws, VALUE_SPATIAL_TARGET_NUM_CHANNELS, yLen, xLen}),
-   connectionTargetsNPP({maxRws, (int64_t)(xLen*yLen), (int64_t)(xLen*yLen)}),
+   connectionStrengthTargetsNPP({maxRws, (int64_t)(xLen*yLen), (int64_t)(xLen*yLen)}),
+   ownershipMatchTargetsNPP({maxRws, (int64_t)(xLen*yLen), (int64_t)(xLen*yLen)}),
    qValueTargetsNCMove({maxRws, QVALUE_SPATIAL_TARGET_NUM_CHANNELS, NNPos::getPolicySize(xLen,yLen)}),
   metadataInputNC({(includeMetadata ? maxRws : 1), SGFMetadata::METADATA_INPUT_NUM_CHANNELS}),
   weightedValueTargetsNC({maxRws,5})
@@ -721,7 +722,8 @@ void TrainingWriteBuffers::addRow(
   int scoreDistrMid = posArea + NNPos::EXTRA_SCORE_DISTR_RADIUS;
   int8_t* rowScoreDistr = scoreDistrN.data + curRows * scoreDistrLen;
   int8_t* rowOwnership = valueTargetsNCHW.data + curRows * VALUE_SPATIAL_TARGET_NUM_CHANNELS * posArea;
-  int8_t* rowConn = connectionTargetsNPP.data + curRows * posArea * posArea;
+  int8_t* rowConnStrength = connectionStrengthTargetsNPP.data + curRows * posArea * posArea;
+  int8_t* rowConnMatch = ownershipMatchTargetsNPP.data + curRows * posArea * posArea;
 
   if(finalOwnership == NULL || (actualGameEndHist.isGameFinished && actualGameEndHist.isNoResult)) {
     rowGlobal[27] = 0.0f;
@@ -729,7 +731,9 @@ void TrainingWriteBuffers::addRow(
     for(int i = 0; i<posArea*2; i++)
       rowOwnership[i] = 0;
     for(int i = 0; i<posArea*posArea; i++)
-      rowConn[i] = 0;
+      rowConnStrength[i] = 0;
+    for(int i = 0; i<posArea*posArea; i++)
+      rowConnMatch[i] = 0;
     for(int i = 0; i<scoreDistrLen; i++)
       rowScoreDistr[i] = 0;
     //Dummy value, to make sure it still sums to 100
@@ -765,11 +769,12 @@ void TrainingWriteBuffers::addRow(
       }
     }
 
-    //Fill connection targets based on connectivity of stones on the final board.
-    //For on-board points: 1 if both points are stones in the same connected component (4-neighbor) of the same color, else -1.
+    //Fill connection targets based on connectivity of ownership on the final board.
+    //For on-board points: 1 if both points are in the same connected component (4-neighbor) of the same color ownership, else -1.
+    //This includes stones AND enclosed territory (empty points and dead opponent stones that are owned by a player).
     //Pairs involving off-board (padded) points are 0.
     {
-      // Precompute in-board mask and union-find over finalBoard stones.
+      // Precompute in-board mask and union-find over finalOwnership (includes territory, not just stones).
       std::vector<bool> inBoard(posArea,false);
       std::vector<int> parent(posArea,-1);
       std::vector<int> rnk(posArea,0);
@@ -790,12 +795,13 @@ void TrainingWriteBuffers::addRow(
         if(rnk[ra] == rnk[rb]) rnk[ra]++;
       };
 
-      // Initialize active nodes for on-board points.
+      // Initialize active nodes for on-board points using finalOwnership instead of finalBoard colors.
       for(int y = 0; y<board.y_size; y++) {
         for(int x = 0; x<board.x_size; x++) {
           int pos = NNPos::xyToPos(x,y,dataXLen);
           Loc locFinal = Location::getLoc(x,y,finalBoard->x_size);
-          Color c = finalBoard->colors[locFinal];
+          // Use finalOwnership which includes territory and dead stones, not just live stones
+          Color c = finalOwnership[locFinal];
           inBoard[pos] = true;
           col[pos] = c;
           if(c == P_BLACK || c == P_WHITE) {
@@ -805,7 +811,7 @@ void TrainingWriteBuffers::addRow(
         }
       }
 
-      // Union same-color adjacent stones.
+      // Union same-color adjacent owned points (includes stones and territory).
       for(int y = 0; y<board.y_size; y++) {
         for(int x = 0; x<board.x_size; x++) {
           int pos = NNPos::xyToPos(x,y,dataXLen);
@@ -855,16 +861,43 @@ void TrainingWriteBuffers::addRow(
         }
       }
 
-      // Fill matrix.
+      // Fill connection strength matrix (Task 1).
       for(int i = 0; i<posArea; i++) {
         for(int j = 0; j<posArea; j++) {
           if(!inBoard[i] || !inBoard[j]) {
-            rowConn[i*posArea + j] = 0;
+            rowConnStrength[i*posArea + j] = 0;
           }
           else {
             int gi = groupId[i];
             int gj = groupId[j];
-            rowConn[i*posArea + j] = (gi != -1 && gi == gj) ? 1 : -1;
+            rowConnStrength[i*posArea + j] = (gi != -1 && gi == gj) ? 1 : -1;
+          }
+        }
+      }
+
+      // Fill ownership match matrix (Task 2).
+      // Based on finalOwnership colors rather than group connectivity.
+      for(int i = 0; i<posArea; i++) {
+        for(int j = 0; j<posArea; j++) {
+          if(!inBoard[i] || !inBoard[j]) {
+            rowConnMatch[i*posArea + j] = 0;
+          }
+          else {
+            Color ci = col[i];  // finalOwnership color for position i
+            Color cj = col[j];  // finalOwnership color for position j
+            
+            // +1 if both positions have same ownership color (both Black or both White)
+            if((ci == P_BLACK && cj == P_BLACK) || (ci == P_WHITE && cj == P_WHITE)) {
+              rowConnMatch[i*posArea + j] = 1;
+            }
+            // -1 if opposite colors (Black vs White)
+            else if((ci == P_BLACK && cj == P_WHITE) || (ci == P_WHITE && cj == P_BLACK)) {
+              rowConnMatch[i*posArea + j] = -1;
+            }
+            // 0 if either position is empty/neutral
+            else {
+              rowConnMatch[i*posArea + j] = 0;
+            }
           }
         }
       }
@@ -992,8 +1025,11 @@ void TrainingWriteBuffers::writeToZipFile(const string& fileName) {
   numBytes = valueTargetsNCHW.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("valueTargetsNCHW", valueTargetsNCHW.dataIncludingHeader, numBytes);
 
-  numBytes = connectionTargetsNPP.prepareHeaderWithNumRows(curRows);
-  zipFile.writeBuffer("connectionTargetsNPP", connectionTargetsNPP.dataIncludingHeader, numBytes);
+  numBytes = connectionStrengthTargetsNPP.prepareHeaderWithNumRows(curRows);
+  zipFile.writeBuffer("connectionStrengthTargetsNPP", connectionStrengthTargetsNPP.dataIncludingHeader, numBytes);
+
+  numBytes = ownershipMatchTargetsNPP.prepareHeaderWithNumRows(curRows);
+  zipFile.writeBuffer("ownershipMatchTargetsNPP", ownershipMatchTargetsNPP.dataIncludingHeader, numBytes);
 
   numBytes = qValueTargetsNCMove.prepareHeaderWithNumRows(curRows);
   zipFile.writeBuffer("qValueTargetsNCMove", qValueTargetsNCMove.dataIncludingHeader, numBytes);

@@ -111,6 +111,7 @@ struct Search {
   double mirrorCenterSymmetryError;
 
   bool alwaysIncludeOwnerMap;
+  bool alwaysIncludeConnectionMap;
 
   //Board weights to compute the region-focused utility, if any, for the root board.
   float* boardWeights;
@@ -229,6 +230,7 @@ struct Search {
   void setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec);
   void setAvoidMoveUntilRescaleRoot(bool b);
   void setAlwaysIncludeOwnerMap(bool b);
+  void setAlwaysIncludeConnectionMap(bool b);
   void setRootSymmetryPruningOnly(const std::vector<int>& rootPruneOnlySymmetries);
   void setParams(SearchParams params);
   void setParamsNoClearing(SearchParams params); //Does not clear search
@@ -403,6 +405,15 @@ struct Search {
     int symmetry
   ) const;
 
+  //Get average connection map across the tree, weighted by visit proportions
+  //Returns flattened Pos*Pos matrix where connection[i*Pos+j] is the connection between position i and j
+  std::vector<double> getAverageTreeConnection(const SearchNode* node = NULL) const;
+  //Same, but applies symmetry
+  std::vector<double> getAverageTreeConnection(
+    const SearchNode* node,
+    int symmetry
+  ) const;
+
 
   std::pair<double,double> getShallowAverageShorttermWLAndScoreError(const SearchNode* node = NULL) const;
   bool getSharpScore(const SearchNode* node, double& ret) const;
@@ -411,7 +422,9 @@ struct Search {
   bool getAnalysisJson(
     const Player perspective,
     int analysisPVLen, bool preventEncore, bool includePolicy,
-    bool includeOwnership, bool includeOwnershipStdev, bool includeMovesOwnership, bool includeMovesOwnershipStdev, bool includePVVisits,
+    bool includeOwnership, bool includeOwnershipStdev, bool includeMovesOwnership, bool includeMovesOwnershipStdev,
+    bool includeConnection,
+    bool includePVVisits,
     nlohmann::json& ret
   ) const;
 
@@ -528,7 +541,7 @@ private:
   // Neural net queries
   // searchnnhelpers.cpp
   //----------------------------------------------------------------------------------------
-  void computeRootNNEvaluation(NNResultBuf& nnResultBuf, bool includeOwnerMap);
+  void computeRootNNEvaluation(NNResultBuf& nnResultBuf, bool includeOwnerMap, bool includeConnectionMap);
   bool initNodeNNOutput(
     SearchThread& thread, SearchNode& node,
     bool isRoot, bool skipCache, bool isReInit
@@ -723,6 +736,28 @@ private:
   ) const;
   template<typename Func>
   double traverseTreeForOwnershipChildren(
+    double minProp,
+    double pruneProp,
+    double desiredProp,
+    double thisNodeWeight,
+    ConstSearchNodeChildrenReference children,
+    double* childWeightBuf,
+    int childrenCapacity,
+    std::unordered_set<const SearchNode*>& graphPath,
+    Func& averaging
+  ) const;
+
+  template<typename Func>
+  bool traverseTreeForConnection(
+    double minProp,
+    double pruneProp,
+    double desiredProp,
+    const SearchNode* node,
+    std::unordered_set<const SearchNode*>& graphPath,
+    Func& averaging
+  ) const;
+  template<typename Func>
+  double traverseTreeForConnectionChildren(
     double minProp,
     double pruneProp,
     double desiredProp,

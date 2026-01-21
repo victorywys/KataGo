@@ -183,7 +183,7 @@ Loc PlayUtils::getGameInitializationMove(
   NNEvaluator* nnEval = (pla == P_BLACK ? botB : botW)->nnEvaluator;
   MiscNNInputParams nnInputParams;
   nnInputParams.drawEquivalentWinsForWhite = (pla == P_BLACK ? botB : botW)->searchParams.drawEquivalentWinsForWhite;
-  nnEval->evaluate(board,hist,pla,nnInputParams,buf,false,false);
+  nnEval->evaluate(board,hist,pla,nnInputParams,buf,false,false,false);
   std::shared_ptr<NNOutput> nnOutput = std::move(buf.result);
 
   vector<Loc> locs;
@@ -279,7 +279,7 @@ void PlayUtils::playExtraBlack(
     for(int i = 0; i<numExtraBlack; i++) {
       MiscNNInputParams nnInputParams;
       nnInputParams.drawEquivalentWinsForWhite = bot->searchParams.drawEquivalentWinsForWhite;
-      bot->nnEvaluator->evaluate(board,hist,pla,nnInputParams,buf,false,false);
+      bot->nnEvaluator->evaluate(board,hist,pla,nnInputParams,buf,false,false,false);
       std::shared_ptr<NNOutput> nnOutput = std::move(buf.result);
 
       bool allowPass = false;
@@ -1250,7 +1250,8 @@ std::shared_ptr<NNOutput> PlayUtils::getFullSymmetryNNOutput(
     nnInputParams.symmetry = sym;
     NNResultBuf buf;
     bool skipCache = true; //Always ignore cache so that we use the desired symmetry
-    nnEval->evaluate(b,hist,pla,sgfMeta,nnInputParams,buf,skipCache,includeOwnerMap);
+    bool includeConnectionMap = false;
+    nnEval->evaluate(b,hist,pla,sgfMeta,nnInputParams,buf,skipCache,includeOwnerMap,includeConnectionMap);
     ptrs.push_back(std::move(buf.result));
   }
   std::shared_ptr<NNOutput> result(new NNOutput(ptrs));

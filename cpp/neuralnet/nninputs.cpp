@@ -317,7 +317,7 @@ void NNInputs::fillScoring(
 
 
 NNOutput::NNOutput()
-  :whiteOwnerMap(NULL),noisedPolicyProbs(NULL)
+  :whiteOwnerMap(NULL),whiteConnectionMap(NULL),noisedPolicyProbs(NULL)
 {}
 NNOutput::NNOutput(const NNOutput& other) {
   nnHash = other.nnHash;
@@ -339,6 +339,14 @@ NNOutput::NNOutput(const NNOutput& other) {
   }
   else
     whiteOwnerMap = NULL;
+
+  if(other.whiteConnectionMap != NULL) {
+    int posLen = nnXLen * nnYLen;
+    whiteConnectionMap = new float[posLen * posLen];
+    std::copy(other.whiteConnectionMap, other.whiteConnectionMap + posLen * posLen, whiteConnectionMap);
+  }
+  else
+    whiteConnectionMap = NULL;
 
   if(other.noisedPolicyProbs != NULL) {
     noisedPolicyProbs = new float[NNPos::MAX_NN_POLICY_SIZE];
@@ -417,6 +425,31 @@ NNOutput::NNOutput(const vector<shared_ptr<NNOutput>>& others) {
     }
   }
 
+  {
+    float whiteConnectionMapCount = 0.0f;
+    whiteConnectionMap = NULL;
+    for(int i = 0; i<len; i++) {
+      const NNOutput& other = *(others[i]);
+      if(other.whiteConnectionMap != NULL) {
+        if(whiteConnectionMap == NULL) {
+          int posLen = nnXLen * nnYLen;
+          whiteConnectionMap = new float[posLen * posLen];
+          std::fill(whiteConnectionMap, whiteConnectionMap + posLen * posLen, 0.0f);
+        }
+        whiteConnectionMapCount += 1.0f;
+        int posLen = nnXLen * nnYLen;
+        for(int pos = 0; pos<posLen*posLen; pos++)
+          whiteConnectionMap[pos] += other.whiteConnectionMap[pos];
+      }
+    }
+    if(whiteConnectionMap != NULL) {
+      assert(whiteConnectionMapCount > 0);
+      int posLen = nnXLen * nnYLen;
+      for(int pos = 0; pos<posLen*posLen; pos++)
+        whiteConnectionMap[pos] /= whiteConnectionMapCount;
+    }
+  }
+
   noisedPolicyProbs = NULL;
 
   //For technical correctness in case of impossibly rare hash collisions:
@@ -487,6 +520,15 @@ NNOutput& NNOutput::operator=(const NNOutput& other) {
   }
   else
     whiteOwnerMap = NULL;
+  if(whiteConnectionMap != NULL)
+    delete[] whiteConnectionMap;
+  if(other.whiteConnectionMap != NULL) {
+    int posLen = nnXLen * nnYLen;
+    whiteConnectionMap = new float[posLen * posLen];
+    std::copy(other.whiteConnectionMap, other.whiteConnectionMap + posLen * posLen, whiteConnectionMap);
+  }
+  else
+    whiteConnectionMap = NULL;
   if(noisedPolicyProbs != NULL)
     delete[] noisedPolicyProbs;
   if(other.noisedPolicyProbs != NULL) {
@@ -507,6 +549,10 @@ NNOutput::~NNOutput() {
   if(whiteOwnerMap != NULL) {
     delete[] whiteOwnerMap;
     whiteOwnerMap = NULL;
+  }
+  if(whiteConnectionMap != NULL) {
+    delete[] whiteConnectionMap;
+    whiteConnectionMap = NULL;
   }
   if(noisedPolicyProbs != NULL) {
     delete[] noisedPolicyProbs;

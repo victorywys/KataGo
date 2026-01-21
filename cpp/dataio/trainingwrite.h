@@ -244,13 +244,21 @@ struct TrainingWriteBuffers {
   //C4: Final board area/territory [-120,120]. All 0 if C34 has weight 0. Unlike ownership, takes into account group tax and scoring rules.
   NumpyBuffer<int8_t> valueTargetsNCHW;
 
-  //Pairwise connectivity targets
+  //Pairwise connectivity targets - TASK 1: Connection Strength
   //Shape [N, Pos, Pos], where Pos = dataXLen*dataYLen.
   //For on-board points only: value is 1 if the two points are connected by a chain of stones of the same color
   //(i.e. belong to the same connected component of stones), and -1 otherwise.
   //Pairs involving off-board points (padding) are 0.
   //All 0 if C27 has weight 0.
-  NumpyBuffer<int8_t> connectionTargetsNPP;
+  NumpyBuffer<int8_t> connectionStrengthTargetsNPP;
+
+  //Pairwise ownership relationship targets - TASK 2: Ownership Match
+  //Shape [N, Pos, Pos], where Pos = dataXLen*dataYLen.
+  //For on-board points only: value is 1 if both points have the same ownership color (from finalOwnership),
+  //-1 if opposite colors (Black vs White), and 0 if either point is empty/neutral.
+  //Pairs involving off-board points (padding) are 0.
+  //All 0 if C27 has weight 0.
+  NumpyBuffer<int8_t> ownershipMatchTargetsNPP;
 
   //Spatial q-value targets, from the perspective of the player to move.
   //C0: winloss * 32000

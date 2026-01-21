@@ -1567,7 +1567,7 @@ struct GTPEngine {
           NNResultBuf buf;
           bool skipCache = true;
           bool includeOwnerMap = false;
-          nnEval->evaluate(board,hist,pla,&analysisParams.humanSLProfile,nnInputParams,buf,skipCache,includeOwnerMap);
+          nnEval->evaluate(board,hist,pla,&analysisParams.humanSLProfile,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
           NNOutput* nnOutput = buf.result.get();
           wlStr += Global::strprintf("%.2fc ", 100.0 * (nnOutput->whiteWinProb - nnOutput->whiteLossProb));
@@ -1583,7 +1583,7 @@ struct GTPEngine {
           NNResultBuf buf;
           bool skipCache = true;
           bool includeOwnerMap = false;
-          nnEval->evaluate(prevBoard,prevHist,prevPla,&analysisParams.humanSLProfile,nnInputParams,buf,skipCache,includeOwnerMap);
+          nnEval->evaluate(prevBoard,prevHist,prevPla,&analysisParams.humanSLProfile,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
           NNOutput* nnOutput = buf.result.get();
           int pos = NNPos::locToPos(prevLoc,board.x_size,nnOutput->nnXLen,nnOutput->nnYLen);
@@ -1615,7 +1615,7 @@ struct GTPEngine {
         NNResultBuf buf;
         bool skipCache = true;
         bool includeOwnerMap = true;
-        nnEvalToUse->evaluate(board,hist,nextPla,&analysisParams.humanSLProfile,nnInputParams,buf,skipCache,includeOwnerMap);
+        nnEvalToUse->evaluate(board,hist,nextPla,&analysisParams.humanSLProfile,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
         NNOutput* nnOutput = buf.result.get();
         out << "symmetry " << symmetry << endl;
@@ -2414,7 +2414,7 @@ int MainCmds::gtp(const vector<string>& args) {
         NNResultBuf buf;
         bool skipCache = true;
         bool includeOwnerMap = true;
-        engine->nnEval->evaluate(board, hist, nextPla, nnInputParams, buf, skipCache, includeOwnerMap);
+        engine->nnEval->evaluate(board, hist, nextPla, nnInputParams, buf, skipCache, includeOwnerMap, false);
         
         NNOutput* nnOutput = buf.result.get();
         
@@ -2556,7 +2556,7 @@ int MainCmds::gtp(const vector<string>& args) {
           int nnXLen = evaluator->getNNXLen();
           int nnYLen = evaluator->getNNYLen();
           
-          evaluator->evaluate(board, hist, pla, nnInputParams, buf, includeOwnerMap, false);
+          evaluator->evaluate(board, hist, pla, nnInputParams, buf, false, includeOwnerMap, false);
           
           // Show policy for test positions
           const float* policyProbs = buf.result->policyProbs;
@@ -2578,7 +2578,7 @@ int MainCmds::gtp(const vector<string>& args) {
           
           // Get NN evaluation with weights
           NNResultBuf buf2;
-          evaluator->evaluate(board, hist, pla, nnInputParams, buf2, includeOwnerMap, false);
+          evaluator->evaluate(board, hist, pla, nnInputParams, buf2, false, includeOwnerMap, false);
           
           // Show policy for test positions with weights
           const float* policyProbs2 = buf2.result->policyProbs;

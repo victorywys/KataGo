@@ -48,6 +48,7 @@ class AsyncBot {
   void setAvoidMoveUntilByLoc(const std::vector<int>& bVec, const std::vector<int>& wVec);
   void setAvoidMoveUntilRescaleRoot(bool b);
   void setAlwaysIncludeOwnerMap(bool b);
+  void setAlwaysIncludeConnectionMap(bool b);
   void setParams(SearchParams params);
   void setParamsNoClearing(SearchParams params);
   void setExternalPatternBonusTable(std::unique_ptr<PatternBonusTable>&& table);

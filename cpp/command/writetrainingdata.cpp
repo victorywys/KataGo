@@ -62,7 +62,7 @@ static void getNNEval(
   nnInputParams.playoutDoublingAdvantage = (playoutDoublingAdvantagePla == getOpp(nextPla) ? -playoutDoublingAdvantage : playoutDoublingAdvantage);
   nnInputParams.maxHistory = maxHistory;
   Board copy(board);
-  nnEval->evaluate(copy,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+  nnEval->evaluate(copy,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 }
 
 // static double getPassProb(

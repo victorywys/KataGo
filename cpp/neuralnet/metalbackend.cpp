@@ -1,5 +1,12 @@
 #ifdef USE_METAL_BACKEND
 
+// TODO: Connection map support not yet implemented for Metal backend.
+// See OpenCL backend implementation for reference. Required changes:
+//   - Add vConnectionEmbeddingConv to SWValueHeadDesc
+//   - Implement Metal shader for computing connection matrix from embeddings
+//   - Add connection embedding buffer allocation and data transfer
+//   - Update Swift ValueHead implementation
+
 #include "../neuralnet/modelversion.h"
 #include "../neuralnet/nneval.h"
 #include "../neuralnet/nninputs.h"
@@ -287,6 +294,11 @@ SWValueHeadDesc MetalProcess::valueHeadDescToSwift(const ValueHeadDesc * valueHe
   SWMatMulLayerDesc sv3Mul = matMulLayerDescToSwift(&valueHead->sv3Mul);
   SWMatBiasLayerDesc sv3Bias = matBiasLayerDescToSwift(&valueHead->sv3Bias);
   SWConvLayerDesc vOwnershipConv = convLayerDescToSwift(&valueHead->vOwnershipConv);
+  // TODO: Add connection embedding support - need to:
+  //   - Convert vConnectionEmbeddingConv to Swift descriptor
+  //   - Update createSWValueHeadDesc signature and Swift implementation
+  //   - Add connection embedding buffer allocation
+  //   - Implement connection matrix computation in Metal shaders
 
   SWValueHeadDesc swDesc = createSWValueHeadDesc(valueHead->modelVersion,
                                                  v1Conv,

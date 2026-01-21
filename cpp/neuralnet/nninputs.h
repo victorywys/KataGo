@@ -147,6 +147,11 @@ struct NNOutput {
   //If not NULL, then this contains a nnXLen*nnYLen-sized map of expected ownership on the board.
   float* whiteOwnerMap;
 
+  //If not NULL, then contains nnXLen*nnYLen * nnXLen*nnYLen matrix of connection probabilities.
+  //Connection between position i and position j is at whiteConnectionMap[i * (nnXLen*nnYLen) + j].
+  //Symmetrical matrix with connection(i,j) = connection(j,i).
+  float* whiteConnectionMap;
+
   //If not NULL, then contains policy with dirichlet noise or any other noise adjustments for this node
   float* noisedPolicyProbs;
 

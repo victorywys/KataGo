@@ -46,19 +46,10 @@ cp -r "$GITROOTDIR"/python/katago "$DATED_ARCHIVE"
     cd "$basedir"/scripts
     while true
     do
-        ./shuffle.sh "$basedir" "$tmpdir" "$NTHREADS" "$BATCHSIZE" "$@"
-        sleep 20
-    done
-) >> "$basedir"/logs/outshuffle.txt 2>&1 & disown
-
-(
-    cd "$basedir"/scripts
-    while true
-    do
         ./export_model_for_selfplay.sh "$NAMEPREFIX" "$basedir" "$USEGATING"
         sleep 10
     done
-) >> "$basedir"/logs/outexport.txt 2>&1 & disown
+)
 
 exit 0
 }

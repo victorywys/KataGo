@@ -1,3 +1,10 @@
+.amlt
+.amltignore
+amlt_cfgs/
+diagnose*
+investigate*
+tmp_dir
+
 *.[oa]
 *.exe
 *~

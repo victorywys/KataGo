@@ -508,12 +508,19 @@ class Metrics:
             *optional_extra,
         ) = model_output_postprocessed
         weighted_value_head_output = None
-        connection_logits = None
-        for extra in optional_extra:
+        connection_strength_logits = None
+        connection_match_logits = None
+        connection_indices = None
+        for i, extra in enumerate(optional_extra):
             if isinstance(extra, torch.Tensor) and extra.ndim == 2 and extra.shape[-1] == 5:
                 weighted_value_head_output = extra
             elif isinstance(extra, torch.Tensor) and extra.ndim == 3:
-                connection_logits = extra
+                # New format: three tensors (strength, match, indices)
+                if i + 2 < len(optional_extra):
+                    connection_strength_logits = extra
+                    connection_match_logits = optional_extra[i + 1]
+                    connection_indices = optional_extra[i + 2]
+                    break
 
         input_binary_nchw = batch["binaryInputNCHW"]
         input_global_nc = batch["globalInputNC"]
@@ -864,22 +871,63 @@ class Metrics:
             loss_weighted_score = torch.zeros_like(loss_policy_player)
             loss_weighted_lead = torch.zeros_like(loss_policy_player)
 
-        # Connection losses (optional)
-        if connection_logits is not None and "connectionTargetsNPP" in batch:
-            target_connection = batch["connectionTargetsNPP"]
-            # target_connection in {-1,+1,0} where 0 means ignore.
-            conn_mask = (target_connection != 0).to(dtype=connection_logits.dtype)
-            target_connection01 = 0.5 * (target_connection.to(dtype=connection_logits.dtype) + 1.0)
-            per_entry = torch.nn.functional.binary_cross_entropy_with_logits(
-                connection_logits,
-                target_connection01,
+        # Connection losses (optional) - Two tasks: strength and ownership match
+        if (connection_strength_logits is not None and connection_match_logits is not None 
+            and "connectionStrengthTargetsNPP" in batch and "ownershipMatchTargetsNPP" in batch):
+            
+            target_strength = batch["connectionStrengthTargetsNPP"]  # N, Pos, Pos
+            target_match = batch["ownershipMatchTargetsNPP"]  # N, Pos, Pos
+            batch_size = target_strength.shape[0]
+            pos = target_strength.shape[1]
+            
+            # Extract targets for sampled indices: N, Pos, Pos -> N, K, Pos
+            # connection_indices shape: N, K
+            K = connection_indices.shape[1]
+            indices_expanded = connection_indices.unsqueeze(-1).expand(-1, -1, pos)  # N, K, Pos
+            target_strength_sampled = torch.gather(
+                target_strength,
+                1,  # dim
+                indices_expanded.long()
+            )  # N, K, Pos
+            target_match_sampled = torch.gather(
+                target_match,
+                1,  # dim
+                indices_expanded.long()
+            )  # N, K, Pos
+            
+            # Task 1: Connection Strength Loss
+            # Mask: ignore padding (value 0), use ±1
+            strength_mask = (target_strength_sampled != 0).to(dtype=connection_strength_logits.dtype)
+            target_strength01 = 0.5 * (target_strength_sampled.to(dtype=connection_strength_logits.dtype) + 1.0)
+            per_entry_strength = torch.nn.functional.binary_cross_entropy_with_logits(
+                connection_strength_logits,
+                target_strength01,
                 reduction="none",
             )
-            per_sample = (per_entry * conn_mask).sum(dim=(1, 2)) / (conn_mask.sum(dim=(1, 2)) + 1e-6)
+            per_sample_strength = (per_entry_strength * strength_mask).sum(dim=(1, 2)) / (strength_mask.sum(dim=(1, 2)) + 1e-6)
+            
+            # Task 2: Ownership Match Loss
+            # Mask: ignore empty/neutral (value 0), use ±1 for same/opposite colors
+            match_mask = (target_match_sampled != 0).to(dtype=connection_match_logits.dtype)
+            target_match01 = 0.5 * (target_match_sampled.to(dtype=connection_match_logits.dtype) + 1.0)
+            per_entry_match = torch.nn.functional.binary_cross_entropy_with_logits(
+                connection_match_logits,
+                target_match01,
+                reduction="none",
+            )
+            per_sample_match = (per_entry_match * match_mask).sum(dim=(1, 2)) / (match_mask.sum(dim=(1, 2)) + 1e-6)
+            
+            # Combine losses with weighting
             connection_loss_scale = float(raw_model.config.get("connection_head", {}).get("loss_scale", 1.0))
-            loss_connection = (per_sample * target_weight_ownership * global_weight).sum() * connection_loss_scale
+            match_weight = float(raw_model.config.get("connection_head", {}).get("match_weight", 0.5))
+            
+            loss_connection_strength = (per_sample_strength * target_weight_ownership * global_weight).sum() * connection_loss_scale
+            loss_connection_match = (per_sample_match * target_weight_ownership * global_weight).sum() * connection_loss_scale * match_weight
+            loss_connection = loss_connection_strength + loss_connection_match
         else:
             loss_connection = torch.zeros_like(loss_policy_player)
+            loss_connection_strength = torch.zeros_like(loss_policy_player)
+            loss_connection_match = torch.zeros_like(loss_policy_player)
 
         loss_sum = (
             loss_policy_player * policy_opt_loss_scale
@@ -953,6 +1001,8 @@ class Metrics:
             "wscoreloss_sum": loss_weighted_score,
             "wleadloss_sum": loss_weighted_lead,
             "connloss_sum": loss_connection,
+            "connstrloss_sum": loss_connection_strength,
+            "connmatchloss_sum": loss_connection_match,
             "loss_sum": loss_sum,
             "pacc1_sum": policy_acc1,
             "vsquare_sum": square_value,

@@ -34,7 +34,7 @@ static void runOwnershipAndMisc(NNEvaluator* nnEval, NNEvaluator* nnEval11, NNEv
     NNResultBuf buf;
     bool skipCache = true;
     bool includeOwnerMap = true;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     printPolicyValueOwnership(board,buf);
 
@@ -44,7 +44,7 @@ static void runOwnershipAndMisc(NNEvaluator* nnEval, NNEvaluator* nnEval11, NNEv
 
     cout << "With root temperature===================" << endl;
     nnInputParams.nnPolicyTemperature = 1.5f;
-    nnEvalPTemp->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEvalPTemp->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
 
     printPolicyValueOwnership(board,buf);
 
@@ -80,12 +80,12 @@ static void runOwnershipAndMisc(NNEvaluator* nnEval, NNEvaluator* nnEval11, NNEv
     NNResultBuf buf;
     bool skipCache = true;
     bool includeOwnerMap = true;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
     printPolicyValueOwnership(board,buf);
 
     cout << "NNLen 11" << endl;
     NNResultBuf buf11;
-    nnEval11->evaluate(board,hist,nextPla,nnInputParams,buf11,skipCache,includeOwnerMap);
+    nnEval11->evaluate(board,hist,nextPla,nnInputParams,buf11,skipCache,includeOwnerMap,false);
     testAssert(buf11.result->nnXLen == 11);
     testAssert(buf11.result->nnYLen == 11);
     printPolicyValueOwnership(board,buf11);
@@ -464,7 +464,7 @@ xx..xoooo
     NNResultBuf buf;
     bool skipCache = true;
     bool includeOwnerMap = true;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
     printPolicyValueOwnership(board,buf);
 
     SearchParams params;
@@ -504,7 +504,7 @@ xx..xoooo
     NNResultBuf buf;
     bool skipCache = true;
     bool includeOwnerMap = true;
-    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap);
+    nnEval->evaluate(board,hist,nextPla,nnInputParams,buf,skipCache,includeOwnerMap,false);
     printPolicyValueOwnership(board,buf);
 
     SearchParams params;

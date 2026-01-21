@@ -744,14 +744,18 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
             if datadir:
                 curdatadir = os.path.realpath(datadir)
             elif latestdatadir:
-                curdatadir = max(
-                    (
-                        os.path.realpath(os.path.join(latestdatadir,item)) for item in os.listdir(latestdatadir)
-                        if os.path.isdir(os.path.join(latestdatadir,item)) and not item.endswith('.tmp')
-                    ),
-                    key=os.path.getmtime,
-                    default=os.path.join(os.path.realpath(latestdatadir),"*")
-                )
+                # Use lexicographic ordering on directory names (which are timestamps like "20260107-143022")
+                # instead of mtime, for compatibility with blob storage that may not preserve mtimes
+                dirs = [
+                    item for item in os.listdir(latestdatadir)
+                    if os.path.isdir(os.path.join(latestdatadir,item)) and not item.endswith('.tmp')
+                ]
+                if dirs:
+                    # Sort lexicographically - works because of YYYYMMDD-HHMMSS format
+                    latest_dir = max(dirs)
+                    curdatadir = os.path.realpath(os.path.join(latestdatadir, latest_dir))
+                else:
+                    curdatadir = os.path.join(os.path.realpath(latestdatadir),"*")
 
 
             # Different directory - new shuffle

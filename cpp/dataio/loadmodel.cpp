@@ -55,21 +55,77 @@ static bool endsWithAnySuffix(const string& path, const vector<string>& suffixes
   return false;
 }
 
+// Extract step number from model path like "prefix-s123456-d789012"
+// Returns -1 if no step number found
+static int64_t extractStepNumber(const string& pathStr) {
+  size_t sPos = pathStr.rfind("-s");
+  if(sPos == string::npos)
+    return -1;
+  
+  size_t startPos = sPos + 2; // Skip "-s"
+  size_t endPos = pathStr.find('-', startPos);
+  if(endPos == string::npos)
+    endPos = pathStr.find('/', startPos);
+  if(endPos == string::npos)
+    endPos = pathStr.find('\\', startPos);
+  if(endPos == string::npos)
+    endPos = pathStr.length();
+  
+  try {
+    string numStr = pathStr.substr(startPos, endPos - startPos);
+    return std::stoll(numStr);
+  }
+  catch(...) {
+    return -1;
+  }
+}
+
 bool LoadModel::findLatestModel(const string& modelsDir, Logger& logger, string& modelName, string& modelFile, string& modelDir, time_t& modelTime) {
   namespace gfs = ghc::filesystem;
   (void)logger;
 
-  bool hasLatestTime = false;
-  gfs::file_time_type latestTime;
+  // For blob storage compatibility, use numeric comparison on step numbers in directory names
+  // Model directories are typically named like: prefix-s123456-d789012 where s{step} is the training step
+  bool hasLatestPath = false;
+  string latestPathStr;
   gfs::path latestPath;
+  gfs::file_time_type latestTime;
+  int64_t latestStepNumber = -1;
+  
   for(const auto& dirEntry: gfs::recursive_directory_iterator(gfs::u8path(modelsDir))) {
     gfs::path filePath = dirEntry.path();
     if(gfs::is_regular_file(filePath) && endsWithAnySuffix(filePath.filename().u8string(), ACCEPTABLE_MODEL_SUFFIXES)) {
-      gfs::file_time_type thisTime = gfs::last_write_time(filePath);
-      if(!hasLatestTime || thisTime > latestTime) {
-        hasLatestTime = true;
-        latestTime = thisTime;
+      string pathStr = filePath.u8string();
+      int64_t stepNumber = extractStepNumber(pathStr);
+      
+      // Compare by step number first (numeric), then lexicographic, then mtime as fallback
+      bool isNewer = false;
+      if(!hasLatestPath) {
+        isNewer = true;
+      }
+      else if(stepNumber >= 0 && latestStepNumber >= 0) {
+        // Both have step numbers, compare numerically
+        isNewer = (stepNumber > latestStepNumber);
+      }
+      else if(stepNumber >= 0 && latestStepNumber < 0) {
+        // New path has step number, old doesn't - prefer new
+        isNewer = true;
+      }
+      else if(stepNumber < 0 && latestStepNumber >= 0) {
+        // Old path has step number, new doesn't - keep old
+        isNewer = false;
+      }
+      else {
+        // Neither has step number, use lexicographic + mtime
+        isNewer = (pathStr > latestPathStr || (pathStr == latestPathStr && gfs::last_write_time(filePath) > latestTime));
+      }
+      
+      if(isNewer) {
+        hasLatestPath = true;
+        latestPathStr = pathStr;
         latestPath = filePath;
+        latestTime = gfs::last_write_time(filePath);
+        latestStepNumber = stepNumber;
       }
     }
   }
@@ -78,7 +134,7 @@ bool LoadModel::findLatestModel(const string& modelsDir, Logger& logger, string&
   modelFile = "/dev/null";
   modelDir = "/dev/null";
   modelTime = (std::time_t)(0);
-  if(hasLatestTime) {
+  if(hasLatestPath) {
     modelFile = latestPath.u8string();
     modelDir = latestPath.parent_path().u8string();
     if(contains(GENERIC_MODEL_NAMES, latestPath.filename().u8string())) {
