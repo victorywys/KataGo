@@ -1514,10 +1514,18 @@ class ValueHead(torch.nn.Module):
         reg_dict["output"].append(self.conv_seki.weight)
         if self.has_connection_head:
             reg_dict["output"].append(self.conv_connection_shared1.weight)
+            reg_dict["output"].append(self.norm_connection_shared1.weight)
+            reg_dict["output_noreg"].append(self.norm_connection_shared1.bias)
             reg_dict["output"].append(self.conv_connection_shared2.weight)
+            reg_dict["output"].append(self.norm_connection_shared2.weight)
+            reg_dict["output_noreg"].append(self.norm_connection_shared2.bias)
             reg_dict["output"].append(self.conv_connection_strength1.weight)
+            reg_dict["output"].append(self.norm_connection_strength1.weight)
+            reg_dict["output_noreg"].append(self.norm_connection_strength1.bias)
             reg_dict["output"].append(self.conv_connection_strength2.weight)
             reg_dict["output"].append(self.conv_connection_match1.weight)
+            reg_dict["output"].append(self.norm_connection_match1.weight)
+            reg_dict["output_noreg"].append(self.norm_connection_match1.bias)
             reg_dict["output"].append(self.conv_connection_match2.weight)
         reg_dict["output"].append(self.linear_s2.weight)
         reg_dict["output_noreg"].append(self.linear_s2.bias)
@@ -1562,10 +1570,10 @@ class ValueHead(torch.nn.Module):
             # Extract shared features for connection prediction
             conn_features = self.conv_connection_shared1(outv1)
             conn_features = self.norm_connection_shared1(conn_features)
-            conn_features = self.act(conn_features)
+            conn_features = self.act1(conn_features)
             conn_features = self.conv_connection_shared2(conn_features)
             conn_features = self.norm_connection_shared2(conn_features)
-            conn_features = self.act(conn_features) * mask  # N, 64, H, W
+            conn_features = self.act1(conn_features) * mask  # N, 64, H, W
             
             batch_size = conn_features.shape[0]
             pos = self.pos_len * self.pos_len
@@ -1605,14 +1613,14 @@ class ValueHead(torch.nn.Module):
             # Task 1: Connection Strength Head
             strength_features = self.conv_connection_strength1(combined_features)
             strength_features = self.norm_connection_strength1(strength_features)
-            strength_features = self.act(strength_features)
+            strength_features = self.act1(strength_features)
             strength_logits = self.conv_connection_strength2(strength_features)  # N*K, 1, H, W
             strength_logits = strength_logits.view(batch_size, K, pos)  # N, K, Pos
             
             # Task 2: Ownership Match Head
             match_features = self.conv_connection_match1(combined_features)
             match_features = self.norm_connection_match1(match_features)
-            match_features = self.act(match_features)
+            match_features = self.act1(match_features)
             match_logits = self.conv_connection_match2(match_features)  # N*K, 1, H, W
             match_logits = match_logits.view(batch_size, K, pos)  # N, K, Pos
             
@@ -2161,7 +2169,13 @@ class Model(torch.nn.Module):
             out_scorebelief_logprobs,
             *value_head_extra,
         ) = value_head_outputs
-        out_connection_logits = value_head_extra[0] if len(value_head_extra) > 0 else None
+        out_connection_logits = None
+        out_connection_match = None
+        out_connection_indices = None
+        if len(value_head_extra) >= 3:
+            out_connection_logits = value_head_extra[0]
+            out_connection_match = value_head_extra[1]
+            out_connection_indices = value_head_extra[2]
         if self.weighted_value_head is not None:
             out_weighted_value = self.weighted_value_head(out_aug, mask=mask, mask_sum_hw=mask_sum_hw, mask_sum=mask_sum)
         else:
@@ -2180,7 +2194,11 @@ class Model(torch.nn.Module):
                 out_scorebelief_logprobs,
             )
             if out_connection_logits is not None:
-                outputs_main = outputs_main + (out_connection_logits,)
+                outputs_main = outputs_main + (
+                    out_connection_logits,
+                    out_connection_match,
+                    out_connection_indices,
+                )
             if out_weighted_value is not None:
                 outputs_main = outputs_main + (out_weighted_value,)
 
@@ -2212,7 +2230,11 @@ class Model(torch.nn.Module):
                 out_scorebelief_logprobs,
             )
             if out_connection_logits is not None:
-                outputs_main = outputs_main + (out_connection_logits,)
+                outputs_main = outputs_main + (
+                    out_connection_logits,
+                    out_connection_match,
+                    out_connection_indices,
+                )
             if out_weighted_value is not None:
                 outputs_main = outputs_main + (out_weighted_value,)
             return (outputs_main,)

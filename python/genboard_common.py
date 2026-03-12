@@ -125,7 +125,7 @@ class Model(nn.Module):
 
     @staticmethod
     def load_from_file(filename):
-        data = torch.load(filename)
+        data = torch.load(filename, weights_only=False)
         model = Model(data["num_channels"], data["num_blocks"])
         model.load_state_dict(data["state_dict"])
         return model

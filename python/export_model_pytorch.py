@@ -213,6 +213,43 @@ def main(args):
         assert biasmask.beta.shape == (1, biasmask.c_in, 1, 1)
         write_weights(biasmask.beta)
 
+    def write_standard_batchnorm(name, bn):
+        """Write a standard torch.nn.BatchNorm2d layer"""
+        writeln(name)
+        
+        num_features = bn.num_features
+        writeln(num_features)
+        epsilon = bn.eps
+        writeln(epsilon)
+        has_gamma_or_scale = True  # BatchNorm2d has weight (gamma)
+        has_beta = True  # BatchNorm2d has bias (beta)
+        writeln(1 if has_gamma_or_scale else 0)
+        writeln(1 if has_beta else 0)
+        
+        # Write running mean
+        if bn.running_mean is not None:
+            write_weights(bn.running_mean)
+        else:
+            write_weights(torch.zeros(num_features, dtype=torch.float))
+        
+        # Write running variance
+        if bn.running_var is not None:
+            write_weights(bn.running_var)
+        else:
+            write_weights(torch.ones(num_features, dtype=torch.float))
+        
+        # Write gamma (weight)
+        if bn.weight is not None:
+            write_weights(bn.weight)
+        else:
+            write_weights(torch.ones(num_features, dtype=torch.float))
+        
+        # Write beta (bias)
+        if bn.bias is not None:
+            write_weights(bn.bias)
+        else:
+            write_weights(torch.zeros(num_features, dtype=torch.float))
+
     def write_activation(name, activation):
         writeln(name)
         if isinstance(activation,torch.nn.ReLU):
@@ -425,9 +462,23 @@ def main(args):
 
         write_conv(name+".conv_ownership",valuehead.conv_ownership)
 
-        # Export connection embedding layer if present
+        # Export connection head layers if present
         if hasattr(valuehead, 'has_connection_head') and valuehead.has_connection_head:
-            write_conv(name+".conv_connection_embed", valuehead.conv_connection_embed)
+            # Shared layers
+            write_conv(name+".conv_connection_shared1", valuehead.conv_connection_shared1)
+            write_standard_batchnorm(name+".norm_connection_shared1", valuehead.norm_connection_shared1)
+            write_conv(name+".conv_connection_shared2", valuehead.conv_connection_shared2)
+            write_standard_batchnorm(name+".norm_connection_shared2", valuehead.norm_connection_shared2)
+            
+            # Connection strength head
+            write_conv(name+".conv_connection_strength1", valuehead.conv_connection_strength1)
+            write_standard_batchnorm(name+".norm_connection_strength1", valuehead.norm_connection_strength1)
+            write_conv(name+".conv_connection_strength2", valuehead.conv_connection_strength2)
+            
+            # Ownership match head
+            write_conv(name+".conv_connection_match1", valuehead.conv_connection_match1)
+            write_standard_batchnorm(name+".norm_connection_match1", valuehead.norm_connection_match1)
+            write_conv(name+".conv_connection_match2", valuehead.conv_connection_match2)
 
     def write_model(model):
         write_trunk("model",model)

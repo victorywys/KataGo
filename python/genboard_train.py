@@ -404,7 +404,7 @@ if __name__ == '__main__':
         if model.num_blocks != num_blocks:
             raise Exception("Number of blocks in model is %d but command line arg was %d" % (model.num_blocks,num_blocks))
         optimizer = optim.SGD(model.parameters(), lr=0.00001*lr_scale, momentum=0.9)
-        optimizer.load_state_dict(torch.load(optimpath))
+        optimizer.load_state_dict(torch.load(optimpath, weights_only=False))
         traindata = load_json(traindatapath)
     else:
         model = Model(num_channels=num_channels, num_blocks=num_blocks).to(gpudevice)

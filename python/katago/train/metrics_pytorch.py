@@ -40,6 +40,32 @@ class Metrics:
         self.moving_unowned_proportion_sum = 0.0
         self.moving_unowned_proportion_weight = 0.0
 
+    @staticmethod
+    def _binary_auroc_from_logits(logits: torch.Tensor, targets_pm1: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        """Compute AUROC for binary labels encoded as +/-1 with 0 masked out."""
+        with torch.no_grad():
+            valid = valid_mask > 0
+            if torch.sum(valid) <= 1:
+                return logits.new_tensor(0.5)
+
+            scores = logits[valid].detach()
+            y_pos = (targets_pm1[valid] > 0)
+            n_pos = torch.sum(y_pos)
+            n_neg = y_pos.numel() - n_pos
+            if n_pos <= 0 or n_neg <= 0:
+                return logits.new_tensor(0.5)
+
+            # AUROC via rank statistic (Mann-Whitney U):
+            # AUC = (sum(ranks_pos) - n_pos*(n_pos+1)/2) / (n_pos*n_neg)
+            order = torch.argsort(scores)
+            ranks = torch.empty_like(order, dtype=torch.float32)
+            ranks[order] = torch.arange(1, order.numel() + 1, device=order.device, dtype=torch.float32)
+            sum_ranks_pos = torch.sum(ranks[y_pos])
+            n_pos_f = n_pos.to(torch.float32)
+            n_neg_f = n_neg.to(torch.float32)
+            auc = (sum_ranks_pos - n_pos_f * (n_pos_f + 1.0) * 0.5) / (n_pos_f * n_neg_f + 1e-12)
+            return auc
+
     def state_dict(self):
         return dict(
             moving_unowned_proportion_sum = self.moving_unowned_proportion_sum,
@@ -904,7 +930,31 @@ class Metrics:
                 target_strength01,
                 reduction="none",
             )
-            per_sample_strength = (per_entry_strength * strength_mask).sum(dim=(1, 2)) / (strength_mask.sum(dim=(1, 2)) + 1e-6)
+            conn_cfg = raw_model.config.get("connection_head", {})
+            use_class_weighting = bool(conn_cfg.get("class_weighting", True))
+            class_weight_max_ratio = float(conn_cfg.get("class_weight_max_ratio", 20.0))
+            class_weight_eps = 1e-6
+
+            if use_class_weighting:
+                # Compute positive class weight from this sampled minibatch.
+                strength_pos_mask = ((target_strength_sampled > 0).to(dtype=connection_strength_logits.dtype) * strength_mask)
+                strength_neg_mask = ((target_strength_sampled < 0).to(dtype=connection_strength_logits.dtype) * strength_mask)
+                strength_pos_count = strength_pos_mask.sum(dim=(1, 2))
+                strength_neg_count = strength_neg_mask.sum(dim=(1, 2))
+                strength_pos_weight = torch.clamp(
+                    strength_neg_count / (strength_pos_count + class_weight_eps),
+                    min=1.0,
+                    max=class_weight_max_ratio,
+                )
+                strength_entry_weight = (
+                    strength_pos_mask * strength_pos_weight.view(-1, 1, 1)
+                    + strength_neg_mask
+                )
+                per_sample_strength = (per_entry_strength * strength_entry_weight).sum(dim=(1, 2)) / (
+                    strength_entry_weight.sum(dim=(1, 2)) + class_weight_eps
+                )
+            else:
+                per_sample_strength = (per_entry_strength * strength_mask).sum(dim=(1, 2)) / (strength_mask.sum(dim=(1, 2)) + class_weight_eps)
             
             # Task 2: Ownership Match Loss
             # Mask: ignore empty/neutral (value 0), use ±1 for same/opposite colors
@@ -915,7 +965,25 @@ class Metrics:
                 target_match01,
                 reduction="none",
             )
-            per_sample_match = (per_entry_match * match_mask).sum(dim=(1, 2)) / (match_mask.sum(dim=(1, 2)) + 1e-6)
+            if use_class_weighting:
+                match_pos_mask = ((target_match_sampled > 0).to(dtype=connection_match_logits.dtype) * match_mask)
+                match_neg_mask = ((target_match_sampled < 0).to(dtype=connection_match_logits.dtype) * match_mask)
+                match_pos_count = match_pos_mask.sum(dim=(1, 2))
+                match_neg_count = match_neg_mask.sum(dim=(1, 2))
+                match_pos_weight = torch.clamp(
+                    match_neg_count / (match_pos_count + class_weight_eps),
+                    min=1.0,
+                    max=class_weight_max_ratio,
+                )
+                match_entry_weight = (
+                    match_pos_mask * match_pos_weight.view(-1, 1, 1)
+                    + match_neg_mask
+                )
+                per_sample_match = (per_entry_match * match_entry_weight).sum(dim=(1, 2)) / (
+                    match_entry_weight.sum(dim=(1, 2)) + class_weight_eps
+                )
+            else:
+                per_sample_match = (per_entry_match * match_mask).sum(dim=(1, 2)) / (match_mask.sum(dim=(1, 2)) + class_weight_eps)
             
             # Combine losses with weighting
             connection_loss_scale = float(raw_model.config.get("connection_head", {}).get("loss_scale", 1.0))
@@ -924,10 +992,24 @@ class Metrics:
             loss_connection_strength = (per_sample_strength * target_weight_ownership * global_weight).sum() * connection_loss_scale
             loss_connection_match = (per_sample_match * target_weight_ownership * global_weight).sum() * connection_loss_scale * match_weight
             loss_connection = loss_connection_strength + loss_connection_match
+            conn_strength_auc = self._binary_auroc_from_logits(
+                connection_strength_logits,
+                target_strength_sampled,
+                strength_mask,
+            )
+            conn_match_auc = self._binary_auroc_from_logits(
+                connection_match_logits,
+                target_match_sampled,
+                match_mask,
+            )
+            conn_auc = 0.5 * (conn_strength_auc + conn_match_auc)
         else:
             loss_connection = torch.zeros_like(loss_policy_player)
             loss_connection_strength = torch.zeros_like(loss_policy_player)
             loss_connection_match = torch.zeros_like(loss_policy_player)
+            conn_strength_auc = torch.zeros_like(loss_policy_player)
+            conn_match_auc = torch.zeros_like(loss_policy_player)
+            conn_auc = torch.zeros_like(loss_policy_player)
 
         loss_sum = (
             loss_policy_player * policy_opt_loss_scale
@@ -1003,6 +1085,9 @@ class Metrics:
             "connloss_sum": loss_connection,
             "connstrloss_sum": loss_connection_strength,
             "connmatchloss_sum": loss_connection_match,
+            "connstrauc_batch": conn_strength_auc,
+            "connmatchauc_batch": conn_match_auc,
+            "connauc_batch": conn_auc,
             "loss_sum": loss_sum,
             "pacc1_sum": policy_acc1,
             "vsquare_sum": square_value,

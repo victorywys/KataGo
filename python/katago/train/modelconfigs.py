@@ -1643,8 +1643,13 @@ for name, base_config in list(config_of_name.items()):
 
 DEFAULT_CONNECTION_HEAD_CONFIG: ModelConfig = {
     "enabled": True,
-    "embedding_channels": 16,
-    "loss_scale": 1.0,
+    "sample_k": 20,
+    "loss_scale": 5.0,
+    "match_weight": 0.5,
+    # Reweight positive labels (+1) against negative labels (-1) using
+    # per-minibatch neg/pos ratio, capped by class_weight_max_ratio.
+    "class_weighting": True,
+    "class_weight_max_ratio": 20.0,
 }
 
 

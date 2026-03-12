@@ -22,7 +22,7 @@ checkpoint_path = args["checkpoint"]
 output_json_to = args["output_json_to"]
 overwrite_checkpoint_from_json = args["overwrite_checkpoint_from_json"]
 
-data = torch.load(checkpoint_path,map_location="cpu")
+data = torch.load(checkpoint_path,map_location="cpu",weights_only=False)
 
 if output_json_to is not None:
     assert output_json_to.endswith(".json")

@@ -26,7 +26,7 @@ import numpy as np
 EXPECTED_Q_VALUE_TARGETS_NCMOVE_CHANNELS = 3
 
 def assert_keys(npz, include_meta, include_qvalues):
-    """Allow optional qValueTargetsNCMove, weightedValueTargetsNC, and connectionTargetsNPP keys."""
+    """Allow optional qValueTargetsNCMove, weightedValueTargetsNC, and connection target keys."""
     base = {
         "binaryInputNCHWPacked",
         "globalInputNC",
@@ -44,8 +44,13 @@ def assert_keys(npz, include_meta, include_qvalues):
         optional.add("qValueTargetsNCMove")
     if "weightedValueTargetsNC" in actual:
         optional.add("weightedValueTargetsNC")
+    # Support both old and new connection target formats
     if "connectionTargetsNPP" in actual:
         optional.add("connectionTargetsNPP")
+    if "connectionStrengthTargetsNPP" in actual:
+        optional.add("connectionStrengthTargetsNPP")
+    if "ownershipMatchTargetsNPP" in actual:
+        optional.add("ownershipMatchTargetsNPP")
     unexpected = actual - base - optional
     missing = base - actual
     assert not missing and not unexpected, f"Missing {missing} unexpected {unexpected} in npz keys {actual}"
@@ -106,7 +111,9 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
     metadataInputNCList = []
     qValueTargetsNCMoveList = []
     weightedValueTargetsNCList = []
-    connectionTargetsNPPList = []
+    connectionTargetsNPPList = []  # Old format (single array)
+    connectionStrengthTargetsNPPList = []  # New format (task 1)
+    ownershipMatchTargetsNPPList = []  # New format (task 2)
 
     for file_idx, input_file in enumerate(input_file_group):
         # Progress every 2 files for visibility into blob storage reads
@@ -156,10 +163,19 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
                 else:
                     weightedValueTargetsNCList.append(None)
 
+                # Handle both old and new connection target formats
                 if "connectionTargetsNPP" in npz:
                     connectionTargetsNPPList.append(npz["connectionTargetsNPP"])
                 else:
                     connectionTargetsNPPList.append(None)
+                if "connectionStrengthTargetsNPP" in npz:
+                    connectionStrengthTargetsNPPList.append(npz["connectionStrengthTargetsNPP"])
+                else:
+                    connectionStrengthTargetsNPPList.append(None)
+                if "ownershipMatchTargetsNPP" in npz:
+                    ownershipMatchTargetsNPPList.append(npz["ownershipMatchTargetsNPP"])
+                else:
+                    ownershipMatchTargetsNPPList.append(None)
             
             read_time = time.time() - read_start
             # Log ALL reads with timing to track progress
@@ -194,11 +210,20 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
                 weightedValueTargetsNCList[i] = np.zeros((nrows,5),dtype=np.float32)
 
     include_connection = any(arr is not None for arr in connectionTargetsNPPList)
+    include_connection_strength = any(arr is not None for arr in connectionStrengthTargetsNPPList)
+    include_ownership_match = any(arr is not None for arr in ownershipMatchTargetsNPPList)
+    
     if include_connection:
         # For connection targets, do not silently mix data with and without the target.
         # It would corrupt training if some rows have missing targets.
         if any(arr is None for arr in connectionTargetsNPPList):
             raise AssertionError("Some input NPZ files have connectionTargetsNPP and others do not - do not mix these in shuffle")
+    if include_connection_strength:
+        if any(arr is None for arr in connectionStrengthTargetsNPPList):
+            raise AssertionError("Some input NPZ files have connectionStrengthTargetsNPP and others do not - do not mix these in shuffle")
+    if include_ownership_match:
+        if any(arr is None for arr in ownershipMatchTargetsNPPList):
+            raise AssertionError("Some input NPZ files have ownershipMatchTargetsNPP and others do not - do not mix these in shuffle")
 
     if len(input_file_group) == 1:
         binaryInputNCHWPacked = binaryInputNCHWPackedList[0]
@@ -211,6 +236,8 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
         qValueTargetsNCMove = qValueTargetsNCMoveList[0]
         weightedValueTargetsNC = weightedValueTargetsNCList[0] if include_weighted else None
         connectionTargetsNPP = connectionTargetsNPPList[0] if include_connection else None
+        connectionStrengthTargetsNPP = connectionStrengthTargetsNPPList[0] if include_connection_strength else None
+        ownershipMatchTargetsNPP = ownershipMatchTargetsNPPList[0] if include_ownership_match else None
     else:
         binaryInputNCHWPacked = np.concatenate(binaryInputNCHWPackedList, axis=0)
         globalInputNC = np.concatenate(globalInputNCList, axis=0)
@@ -222,6 +249,8 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
         qValueTargetsNCMove = np.concatenate(qValueTargetsNCMoveList, axis=0) if include_qvalues else None
         weightedValueTargetsNC = np.concatenate(weightedValueTargetsNCList, axis=0) if include_weighted else None
         connectionTargetsNPP = np.concatenate(connectionTargetsNPPList, axis=0) if include_connection else None
+        connectionStrengthTargetsNPP = np.concatenate(connectionStrengthTargetsNPPList, axis=0) if include_connection_strength else None
+        ownershipMatchTargetsNPP = np.concatenate(ownershipMatchTargetsNPPList, axis=0) if include_ownership_match else None
     
     concat_time = time.time() - concat_start
     print("    Group %d: Concatenation done in %.1fs, now shuffling %d rows..." % (input_idx, concat_time, binaryInputNCHWPacked.shape[0]), flush=True)
@@ -239,6 +268,8 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
     assert(weightedValueTargetsNC.shape[0] == num_rows_to_keep if include_weighted else True)
     assert(connectionTargetsNPP.shape[0] == num_rows_to_keep if include_connection else True)
     assert(connectionTargetsNPP.shape[0] == num_rows_to_keep if include_connection else True)
+    assert(connectionStrengthTargetsNPP.shape[0] == num_rows_to_keep if include_connection_strength else True)
+    assert(ownershipMatchTargetsNPP.shape[0] == num_rows_to_keep if include_ownership_match else True)
 
     if keep_prob < 1.0:
         num_rows_to_keep = min(num_rows_to_keep,int(round(num_rows_to_keep * keep_prob)))
@@ -253,6 +284,10 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
         arrs.append(weightedValueTargetsNC)
     if include_connection:
         arrs.append(connectionTargetsNPP)
+    if include_connection_strength:
+        arrs.append(connectionStrengthTargetsNPP)
+    if include_ownership_match:
+        arrs.append(ownershipMatchTargetsNPP)
 
     shuffled = joint_shuffle_take_first_n(num_rows_to_keep, arrs)
     idx = 0
@@ -270,6 +305,10 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
         weightedValueTargetsNC = shuffled[idx]; idx += 1
     if include_connection:
         connectionTargetsNPP = shuffled[idx]; idx += 1
+    if include_connection_strength:
+        connectionStrengthTargetsNPP = shuffled[idx]; idx += 1
+    if include_ownership_match:
+        ownershipMatchTargetsNPP = shuffled[idx]; idx += 1
     
     shuffle_time = time.time() - shuffle_start
     print("    Group %d: Shuffle done in %.1fs, memory after shuffle: %d MB, now writing to %d shard files..." % (input_idx, shuffle_time, memusage_mb(), num_out_files), flush=True)
@@ -313,6 +352,10 @@ def _shardify_impl(input_idx, input_file_group, num_out_files, out_tmp_dirs, kee
             save_dict["weightedValueTargetsNC"] = weightedValueTargetsNC[start:stop]
         if include_connection:
             save_dict["connectionTargetsNPP"] = connectionTargetsNPP[start:stop]
+        if include_connection_strength:
+            save_dict["connectionStrengthTargetsNPP"] = connectionStrengthTargetsNPP[start:stop]
+        if include_ownership_match:
+            save_dict["ownershipMatchTargetsNPP"] = ownershipMatchTargetsNPP[start:stop]
 
         # Use lower compression (level 1) for faster writes - still reduces size significantly
         # but saves 50-70% of compression time
@@ -350,8 +393,12 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
     metadataInputNCs = []
     qValueTargetsNCMoves = []
     connectionTargetsNPPs = []
+    connectionStrengthTargetsNPPs = []
+    ownershipMatchTargetsNPPs = []
 
     include_connection = None
+    include_connection_strength = None
+    include_ownership_match = None
 
     for input_idx in range(num_shards_to_merge):
         shard_filename = os.path.join(out_tmp_dir, str(input_idx) + ".npz")
@@ -368,11 +415,21 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
                 metadataInputNC = npz["metadataInputNC"] if include_meta else None
                 qValueTargetsNCMove = npz["qValueTargetsNCMove"] if include_qvalues else None
                 connectionTargetsNPP = npz["connectionTargetsNPP"] if "connectionTargetsNPP" in npz else None
+                connectionStrengthTargetsNPP = npz["connectionStrengthTargetsNPP"] if "connectionStrengthTargetsNPP" in npz else None
+                ownershipMatchTargetsNPP = npz["ownershipMatchTargetsNPP"] if "ownershipMatchTargetsNPP" in npz else None
 
                 if include_connection is None:
                     include_connection = (connectionTargetsNPP is not None)
                 elif include_connection != (connectionTargetsNPP is not None):
                     raise AssertionError("Shards have inconsistent presence of connectionTargetsNPP - do not mix")
+                if include_connection_strength is None:
+                    include_connection_strength = (connectionStrengthTargetsNPP is not None)
+                elif include_connection_strength != (connectionStrengthTargetsNPP is not None):
+                    raise AssertionError("Shards have inconsistent presence of connectionStrengthTargetsNPP - do not mix")
+                if include_ownership_match is None:
+                    include_ownership_match = (ownershipMatchTargetsNPP is not None)
+                elif include_ownership_match != (ownershipMatchTargetsNPP is not None):
+                    raise AssertionError("Shards have inconsistent presence of ownershipMatchTargetsNPP - do not mix")
 
                 binaryInputNCHWPackeds.append(binaryInputNCHWPacked)
                 globalInputNCs.append(globalInputNC)
@@ -386,6 +443,10 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
                     qValueTargetsNCMoves.append(qValueTargetsNCMove)
                 if include_connection:
                     connectionTargetsNPPs.append(connectionTargetsNPP)
+                if include_connection_strength:
+                    connectionStrengthTargetsNPPs.append(connectionStrengthTargetsNPP)
+                if include_ownership_match:
+                    ownershipMatchTargetsNPPs.append(ownershipMatchTargetsNPP)
         except FileNotFoundError:
             print("WARNING: Empty shard in merge_shards for shard :", input_idx, filename)
 
@@ -420,6 +481,12 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
     connectionTargetsNPP = np.concatenate(connectionTargetsNPPs) if include_connection else None
     if include_connection:
         del connectionTargetsNPPs
+    connectionStrengthTargetsNPP = np.concatenate(connectionStrengthTargetsNPPs) if include_connection_strength else None
+    if include_connection_strength:
+        del connectionStrengthTargetsNPPs
+    ownershipMatchTargetsNPP = np.concatenate(ownershipMatchTargetsNPPs) if include_ownership_match else None
+    if include_ownership_match:
+        del ownershipMatchTargetsNPPs
     
     print("  After concatenation (mem: %d MB)" % memusage_mb(), flush=True)
 
@@ -432,55 +499,105 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
     assert(metadataInputNC.shape[0] == num_rows if include_meta else True)
     assert(qValueTargetsNCMove.shape[0] == num_rows if include_qvalues else True)
     assert(connectionTargetsNPP.shape[0] == num_rows if include_connection else True)
+    assert(connectionStrengthTargetsNPP.shape[0] == num_rows if include_connection_strength else True)
+    assert(ownershipMatchTargetsNPP.shape[0] == num_rows if include_ownership_match else True)
 
     if include_meta and include_qvalues:
         arrs = [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove]
         if include_connection:
             arrs.append(connectionTargetsNPP)
+        if include_connection_strength:
+            arrs.append(connectionStrengthTargetsNPP)
+        if include_ownership_match:
+            arrs.append(ownershipMatchTargetsNPP)
         [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,qValueTargetsNCMove,*extra] = (
             joint_shuffle_take_first_n(
                 num_rows,
                 arrs,
             )
         )
+        extra_idx = 0
         if include_connection:
-            connectionTargetsNPP = extra[0]
+            connectionTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_connection_strength:
+            connectionStrengthTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_ownership_match:
+            ownershipMatchTargetsNPP = extra[extra_idx]
+            extra_idx += 1
     elif include_meta:
         arrs = [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC]
         if include_connection:
             arrs.append(connectionTargetsNPP)
+        if include_connection_strength:
+            arrs.append(connectionStrengthTargetsNPP)
+        if include_ownership_match:
+            arrs.append(ownershipMatchTargetsNPP)
         [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,metadataInputNC,*extra] = (
             joint_shuffle_take_first_n(
                 num_rows,
                 arrs,
             )
         )
+        extra_idx = 0
         if include_connection:
-            connectionTargetsNPP = extra[0]
+            connectionTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_connection_strength:
+            connectionStrengthTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_ownership_match:
+            ownershipMatchTargetsNPP = extra[extra_idx]
+            extra_idx += 1
     elif include_qvalues:
         arrs = [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,qValueTargetsNCMove]
         if include_connection:
             arrs.append(connectionTargetsNPP)
+        if include_connection_strength:
+            arrs.append(connectionStrengthTargetsNPP)
+        if include_ownership_match:
+            arrs.append(ownershipMatchTargetsNPP)
         [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,qValueTargetsNCMove,*extra] = (
             joint_shuffle_take_first_n(
                 num_rows,
                 arrs,
             )
         )
+        extra_idx = 0
         if include_connection:
-            connectionTargetsNPP = extra[0]
+            connectionTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_connection_strength:
+            connectionStrengthTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_ownership_match:
+            ownershipMatchTargetsNPP = extra[extra_idx]
+            extra_idx += 1
     else:
         arrs = [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW]
         if include_connection:
             arrs.append(connectionTargetsNPP)
+        if include_connection_strength:
+            arrs.append(connectionStrengthTargetsNPP)
+        if include_ownership_match:
+            arrs.append(ownershipMatchTargetsNPP)
         [binaryInputNCHWPacked,globalInputNC,policyTargetsNCMove,globalTargetsNC,scoreDistrN,valueTargetsNCHW,*extra] = (
             joint_shuffle_take_first_n(
                 num_rows,
                 arrs,
             )
         )
+        extra_idx = 0
         if include_connection:
-            connectionTargetsNPP = extra[0]
+            connectionTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_connection_strength:
+            connectionStrengthTargetsNPP = extra[extra_idx]
+            extra_idx += 1
+        if include_ownership_match:
+            ownershipMatchTargetsNPP = extra[extra_idx]
+            extra_idx += 1
 
     assert(binaryInputNCHWPacked.shape[0] == num_rows)
     assert(globalInputNC.shape[0] == num_rows)
@@ -491,6 +608,8 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
     assert(metadataInputNC.shape[0] == num_rows if include_meta else True)
     assert(qValueTargetsNCMove.shape[0] == num_rows if include_qvalues else True)
     assert(connectionTargetsNPP.shape[0] == num_rows if include_connection else True)
+    assert(connectionStrengthTargetsNPP.shape[0] == num_rows if include_connection_strength else True)
+    assert(ownershipMatchTargetsNPP.shape[0] == num_rows if include_ownership_match else True)
 
     # print("%s: Merge writing... (mem usage %dMB)" % (str(datetime.datetime.now()),memusage_mb()), flush=True)
 
@@ -514,6 +633,10 @@ def merge_shards(filename, num_shards_to_merge, out_tmp_dir, batch_size, ensure_
             save_dict["qValueTargetsNCMove"] = qValueTargetsNCMove[start:stop]
         if include_connection:
             save_dict["connectionTargetsNPP"] = connectionTargetsNPP[start:stop]
+        if include_connection_strength:
+            save_dict["connectionStrengthTargetsNPP"] = connectionStrengthTargetsNPP[start:stop]
+        if include_ownership_match:
+            save_dict["ownershipMatchTargetsNPP"] = ownershipMatchTargetsNPP[start:stop]
 
         np.savez_compressed(
             filename,

@@ -66,6 +66,7 @@ if __name__ == "__main__":
 
     required_args.add_argument('-pos-len', help='Spatial edge length of expected training data, e.g. 19 for 19x19 Go', type=int, required=True)
     required_args.add_argument('-batch-size', help='Per-GPU batch size to use for training', type=int, required=True)
+    optional_args.add_argument('-val-batch-size', help='Batch size for validation (default: same as training batch-size)', type=int, required=False)
     optional_args.add_argument('-samples-per-epoch', help='Number of data samples to consider as one epoch', type=int, required=False)
     optional_args.add_argument('-model-kind', help='String name for what model config to use', required=False)
     optional_args.add_argument('-lr-scale', help='LR multiplier on the hardcoded schedule', type=float, required=False)
@@ -154,6 +155,7 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
 
     pos_len = args["pos_len"]
     batch_size = args["batch_size"]
+    val_batch_size = args["val_batch_size"] if args["val_batch_size"] is not None else batch_size
     samples_per_epoch = args["samples_per_epoch"]
     model_kind = args["model_kind"]
     lr_scale = args["lr_scale"]
@@ -475,7 +477,7 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
 
             return (model_config, ddp_model, raw_model, swa_model, optimizer, metrics_obj, running_metrics, train_state, last_val_metrics)
         else:
-            state_dict = torch.load(path_to_load_from, map_location=device)
+            state_dict = torch.load(path_to_load_from, map_location=device, weights_only=False)
             model_config = state_dict["config"] if "config" in state_dict else modelconfigs.resolve_model_config(model_kind)
             logging.info(str(model_config))
             raw_model = Model(model_config,pos_len)
@@ -1251,15 +1253,20 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
             if len(val_files) == 0:
                 logging.info("No validation files, skipping validation step")
             else:
+                # Clear GPU cache before validation to start fresh
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
                 with torch.no_grad():
                     ddp_model.eval()
                     val_metric_sums = defaultdict(float)
                     val_metric_weights = defaultdict(float)
                     val_samples = 0
+                    val_batch_count = 0
                     t0 = time.perf_counter()
                     for batch in data_processing_pytorch.read_npz_training_data(
                         val_files,
-                        batch_size,
+                        val_batch_size,
                         world_size=1,  # Only the main process validates
                         rank=0,        # Only the main process validates
                         pos_len=pos_len,
@@ -1268,11 +1275,20 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
                         include_meta=raw_model.get_has_metadata_encoder(),
                         model_config=model_config
                     ):
-                        model_outputs = ddp_model(
-                            batch["binaryInputNCHW"],
-                            batch["globalInputNC"],
-                            input_meta=(batch["metadataInputNC"] if raw_model.get_has_metadata_encoder() else None),
-                        )
+                        if use_fp16:
+                            with autocast():
+                                model_outputs = ddp_model(
+                                    batch["binaryInputNCHW"],
+                                    batch["globalInputNC"],
+                                    input_meta=(batch["metadataInputNC"] if raw_model.get_has_metadata_encoder() else None),
+                                )
+                            model_outputs = raw_model.float32ify_output(model_outputs)
+                        else:
+                            model_outputs = ddp_model(
+                                batch["binaryInputNCHW"],
+                                batch["globalInputNC"],
+                                input_meta=(batch["metadataInputNC"] if raw_model.get_has_metadata_encoder() else None),
+                            )
                         postprocessed = raw_model.postprocess_output(model_outputs)
                         extra_outputs = None
                         metrics = metrics_obj.metrics_dict_batchwise(
@@ -1292,14 +1308,25 @@ def main(rank: int, world_size: int, args, multi_gpu_device_ids, readpipes, writ
                             intermediate_loss_scale=intermediate_loss_scale,
                         )
                         metrics = detensorify_metrics(metrics)
-                        accumulate_metrics(val_metric_sums, val_metric_weights, metrics, batch_size, decay=1.0, new_weight=1.0)
-                        val_samples += batch_size
+                        accumulate_metrics(val_metric_sums, val_metric_weights, metrics, val_batch_size, decay=1.0, new_weight=1.0)
+                        val_samples += val_batch_size
+                        val_batch_count += 1
+                        
+                        # Clear GPU cache every 10 batches to prevent memory buildup
+                        if torch.cuda.is_available() and val_batch_count % 10 == 0:
+                            torch.cuda.empty_cache()
+                        
                         if max_val_samples is not None and val_samples > max_val_samples:
                             break
                         val_metric_sums["nsamp_train"] = running_metrics["sums"]["nsamp"]
                         val_metric_weights["nsamp_train"] = running_metrics["weights"]["nsamp"]
                         val_metric_sums["wsum_train"] = running_metrics["sums"]["wsum"]
                         val_metric_weights["wsum_train"] = running_metrics["weights"]["wsum"]
+                    
+                    # Clear GPU cache after validation
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
                     last_val_metrics["sums"] = val_metric_sums
                     last_val_metrics["weights"] = val_metric_weights
                     log_metrics(val_metric_sums, val_metric_weights, metrics, val_metrics_out)

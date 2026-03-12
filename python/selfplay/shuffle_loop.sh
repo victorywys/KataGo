@@ -47,7 +47,7 @@ cp -r "$GITROOTDIR"/python/katago "$DATED_ARCHIVE"
     while true
     do
         ./shuffle.sh "$basedir" "$tmpdir" "$NTHREADS" "$BATCHSIZE" "$@"
-        sleep 300
+        sleep 20
     done
 )
 

@@ -105,7 +105,7 @@ def main(args):
         path_to_load_from = get_checkpoint_path()
         assert path_to_load_from is not None
 
-        state_dict = torch.load(path_to_load_from, map_location="cpu")
+        state_dict = torch.load(path_to_load_from, map_location="cpu", weights_only=False)
         model_config = state_dict["config"]
         logging.info(str(model_config))
 
